@@ -135,6 +135,32 @@ progress rings or themeable menus on macOS.
   dialog's modality while it is open and listens for outside clicks through one
   global click dispatcher per window.
 
+## Keyboard focus
+
+A canvas is not in the Tab order unless it asks for it, so `ui/theme/focus.py`
+holds the three pieces every drawn control uses: `track_focus` (take part in the
+Tab order and say whether the keyboard has the focus), `focus_ring` (the ring,
+drawn only then) and `activate_with_keys` (Space and Enter do what a click
+does). A click never focuses a canvas, so the ring appears only for the
+keyboard.
+
+- Rows of the "Today" tab are canvases of their own and take the focus directly.
+  The dashboard draws its rows as items of one canvas, and items cannot take the
+  focus, so each row has a one-pixel anchor canvas, painted like the row, that
+  stands in for it in the Tab order.
+- Both lists redraw from scratch; `FocusMemory` puts the focus back on the same
+  control of the same habit afterwards.
+- The three views share one grid cell. The ones not shown leave the grid, so Tab
+  never reaches a control that cannot be seen.
+- An open `SoftMenu` list never takes the focus: the field keeps it and moves a
+  highlight with the arrow keys. In the habit form, Escape closes the list
+  first and the dialog on the next press.
+- The habit form scrolls to keep the focused field in view.
+
+Text colors are checked against every surface they are drawn on
+(`tests/unit/ui/test_contrast.py`, WCAG 2.2 formula, 4.5 : 1); the focus ring
+color reaches 3 : 1 on all of them.
+
 ## Testing
 
 - `tests/unit`: no window needed. Domain, service, storage, the architecture
@@ -145,8 +171,8 @@ progress rings or themeable menus on macOS.
 
 ## Known limits
 
-- The interface is drawn on a canvas: it is not reachable by keyboard and does
-  not expose its content to screen readers.
+- The interface is drawn on a canvas. It is reachable by keyboard (see below)
+  but does not expose its content to screen readers.
 - Reminders sound only while the application is open, and only on macOS.
 - Only macOS is tested. The platform data directories for Linux and Windows
   follow the platforms' conventions but have not been run.

@@ -144,13 +144,30 @@ su propia ventana (macOS pide una vez permiso para grabar la pantalla). El modo 
 rechaza las capturas de pantalla completa, para que un escritorio nunca termine en el
 repositorio.
 
+## Teclado
+
+| Tecla | Hace |
+| --- | --- |
+| Tab / Shift+Tab | Recorre pestañas, filas de hábitos, botones, chips y campos del formulario; un anillo marca el foco |
+| Espacio o Enter | Acciona el control con foco (marca un hábito, abre una lista, elige un día) |
+| Izquierda / Derecha | En las pestañas, pasa a la pestaña vecina |
+| E | En una fila de hábito, la abre para editarla (lo que hace el clic derecho) |
+| Arriba / Abajo, Inicio / Fin | En una lista abierta, mueve la selección; en el selector de fechas, Arriba y Abajo mueven una semana |
+| Re Pág / Av Pág | En el selector de fechas, mueve un mes |
+| Esc | Cierra la lista abierta, o el diálogo sin guardar |
+
+El anillo de foco aparece solo mientras el teclado tiene el foco, nunca después de un clic.
+
 ## Estado y límites
 
 - Desarrollada y probada en **macOS**. Las carpetas de datos de Linux y Windows
   siguen la convención de cada plataforma pero no se han ejecutado.
 - Los recordatorios suenan solo con la app abierta, y solo en macOS.
-- La interfaz está dibujada sobre un canvas: no se puede usar con el teclado y no
-  expone su contenido a lectores de pantalla.
+- La interfaz está dibujada sobre un canvas: se puede usar con el teclado (ver
+  arriba), pero no expone su contenido a lectores de pantalla. Los colores de
+  texto llegan a un contraste de 4,5 : 1 sobre las superficies donde se dibujan,
+  y una prueba lo comprueba con la fórmula de WCAG 2.2; los colores pastel de las
+  categorías no son texto y siempre van acompañados del nombre o el ícono del área.
 - No hay pausar ni archivar un hábito: para retirarlo, ponle una fecha de fin (su
   historial se conserva) o elimínalo.
 - Los valores registrados (páginas, minutos...) se guardan y se muestran, pero las

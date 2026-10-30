@@ -144,13 +144,30 @@ its own window (macOS asks once to allow the terminal to record the screen). The
 manual mode refuses full-screen captures, so that a desktop never ends up in the
 repository.
 
+## Keyboard
+
+| Key | Does |
+| --- | --- |
+| Tab / Shift+Tab | Moves through tabs, habit rows, buttons, chips and form fields; a ring marks the focus |
+| Space or Enter | Presses the focused control (marks a habit, opens a list, picks a day) |
+| Left / Right | On the tabs, goes to the neighbor tab |
+| E | On a habit row, opens it for editing (what a right click does) |
+| Up / Down, Home / End | In an open list, moves the highlight; in the date picker, Up and Down move a week |
+| Page Up / Page Down | In the date picker, moves a month |
+| Esc | Closes the open list, or the dialog without saving |
+
+The focus ring shows only while the keyboard has the focus, never after a click.
+
 ## Status and limits
 
 - Developed and tested on **macOS**. The data folders for Linux and Windows
   follow each platform's convention but have not been run.
 - Reminders sound only while the app is open, and only on macOS.
-- The interface is drawn on a canvas: it cannot be used from the keyboard and
-  does not expose its content to screen readers.
+- The interface is drawn on a canvas: it can be used from the keyboard (see
+  below), but it does not expose its content to screen readers. Text colors
+  reach a contrast of 4.5 : 1 on the surfaces they are drawn on, and a test
+  checks it with the WCAG 2.2 formula; the pastel category colors are not text
+  and are always accompanied by the area's name or icon.
 - There is no pause or archive for a habit: to retire one, give it an end date
   (its history is kept) or delete it.
 - Recorded values (pages, minutes...) are stored and shown, but the monthly
