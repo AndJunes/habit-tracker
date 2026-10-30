@@ -11,6 +11,12 @@ The limits are the habit's period of validity: days outside it are dimmed and do
 the limits move and a date that was already picked ends up outside, it is NOT dropped silently:
 it is painted pink (cell and chip) so the conflict is visible and the date can be removed.
 
+The grid can be driven from the keyboard: Tab reaches it, and while it has the focus a ring marks
+the day under the keyboard cursor. Left and Right move the cursor a day, Up and Down a week, Page
+Up and Page Down a month (the visible month follows it), and Space or Enter pick or drop the day
+under the cursor. The cursor may rest on a day outside the period, but such a day cannot be
+picked. The month buttons and the chips below the grid are reachable with Tab too.
+
 The widget only holds dates. It knows nothing about habits or files, and it is told what day
 "today" is instead of reading the clock.
 """
@@ -18,8 +24,8 @@ The widget only holds dates. It knows nothing about habits or files, and it is t
 import calendar
 import tkinter as tk
 import tkinter.font as tkfont
-from collections.abc import Callable, Iterable
-from datetime import date
+from collections.abc import Callable, Iterable, Mapping
+from datetime import date, timedelta
 from functools import partial
 from typing import Literal
 
@@ -27,6 +33,7 @@ from ..calendar_es import MONTHS, WEEKDAYS_SHORT, short_date_text
 from ..theme import palette
 from ..theme.cursors import DEFAULT_CURSOR, pointer_cursor
 from ..theme.drawing import rounded_rect
+from ..theme.focus import activate_with_keys, focus_ring, track_focus
 from ..theme.fonts import font
 from ..theme.tkutil import TkEvent
 from .soft_button import SoftButton
@@ -41,6 +48,14 @@ CHIPS_PER_ROW = 5
 DEFAULT_WIDTH = 408
 
 _DAYS_IN_WEEK = 7
+# What each arrow key moves the keyboard cursor by, in days; Page Up and Page Down move months.
+_DAYS_PER_KEY: Mapping[str, int] = {
+    "<Left>": -1,
+    "<Right>": 1,
+    "<Up>": -_DAYS_IN_WEEK,
+    "<Down>": _DAYS_IN_WEEK,
+}
+_MONTHS_PER_KEY: Mapping[str, int] = {"<Prior>": -1, "<Next>": 1}
 _CELL_RADIUS = 9
 _CELL_INSET = 1
 _TODAY_OUTLINE_WIDTH = 2
@@ -59,6 +74,13 @@ _PREVIOUS = "\N{SINGLE LEFT-POINTING ANGLE QUOTATION MARK}"
 _NEXT = "\N{SINGLE RIGHT-POINTING ANGLE QUOTATION MARK}"
 _DROP_MARK = "✕"
 _DROP_ALL = "Quitar todas"
+
+
+def _shifted_by_months(day: date, months: int) -> date:
+    """The same day of the month ``months`` away, or its last day if that month is shorter."""
+    year, month_index = divmod(day.year * 12 + day.month - 1 + months, 12)
+    last_day = calendar.monthrange(year, month_index + 1)[1]
+    return date(year, month_index + 1, min(day.day, last_day))
 
 
 class DatePicker(tk.Frame):
@@ -114,6 +136,9 @@ class DatePicker(tk.Frame):
         self.canvas.bind("<Button-1>", self._on_click)
         self.canvas.bind("<Motion>", self._on_motion)
         self.canvas.bind("<Leave>", lambda _event: self._set_hovered(None))
+        self._cursor = self._initial_cursor()
+        self._has_focus = track_focus(self.canvas, self._draw_grid)
+        self._bind_keys()
 
         # The picked dates, as chips that are dropped with a click.
         self.chips_frame = tk.Frame(self, bg=palette.PAPER)
@@ -196,6 +221,70 @@ class DatePicker(tk.Frame):
             self._selection.add(day)  # a set: picking twice does not duplicate
         self._changed()
 
+    # ---------- The keyboard cursor ----------
+
+    @property
+    def cursor(self) -> date:
+        """The day under the keyboard cursor, always inside the visible month.
+
+        When the month changes under it (the month buttons) the cursor keeps its day number,
+        or the last day of a shorter month.
+        """
+        if (self._cursor.year, self._cursor.month) != (self.year, self.month):
+            last_day = calendar.monthrange(self.year, self.month)[1]
+            self._cursor = date(self.year, self.month, min(self._cursor.day, last_day))
+        return self._cursor
+
+    def move_cursor_days(self, days: int) -> None:
+        """Moves the keyboard cursor by ``days``, showing the month it lands in."""
+        self._place_cursor(self.cursor + timedelta(days=days))
+
+    def move_cursor_months(self, months: int) -> None:
+        """Moves the keyboard cursor by whole months, keeping the day when the month has it."""
+        self._place_cursor(_shifted_by_months(self.cursor, months))
+
+    def toggle_cursor(self) -> None:
+        """Picks or drops the day under the keyboard cursor, as a click on it would."""
+        self.toggle(self.cursor)
+
+    def _place_cursor(self, day: date) -> None:
+        self._cursor = day
+        if (day.year, day.month) != (self.year, self.month):
+            self.year, self.month = day.year, day.month
+            self.hovered_day = None  # the pointer no longer rests on the cell it had lit
+        self._draw_grid()
+
+    def _initial_cursor(self) -> date:
+        """Where the cursor starts, inside the month that opens.
+
+        Today when it can be picked, else the first picked date, else the first day that can
+        be picked (the first of the month when none can).
+        """
+        month_days = [
+            date(self.year, self.month, number)
+            for number in range(1, calendar.monthrange(self.year, self.month)[1] + 1)
+        ]
+        if self._today in month_days and self.in_range(self._today):
+            return self._today
+        picked = [day for day in month_days if day in self._selection]
+        pickable = [day for day in month_days if self.in_range(day)]
+        return (picked or pickable or month_days)[0]
+
+    def _bind_keys(self) -> None:
+        for key, days in _DAYS_PER_KEY.items():
+            self.canvas.bind(key, partial(self._on_days_key, days), add="+")
+        for key, months in _MONTHS_PER_KEY.items():
+            self.canvas.bind(key, partial(self._on_months_key, months), add="+")
+        activate_with_keys(self.canvas, self.toggle_cursor)
+
+    def _on_days_key(self, days: int, _event: TkEvent) -> str:
+        self.move_cursor_days(days)
+        return "break"  # a scrolling container must not also take the arrow
+
+    def _on_months_key(self, months: int, _event: TkEvent) -> str:
+        self.move_cursor_months(months)
+        return "break"
+
     @staticmethod
     def _nav_button(parent: tk.Frame, text: str, command: Callable[[], object]) -> SoftButton:
         return SoftButton(
@@ -240,6 +329,8 @@ class DatePicker(tk.Frame):
         canvas.delete("all")
         self._month_label.configure(text=f"{MONTHS[self.month - 1]} {self.year}")
         cell_width = self.cell_width
+        cursor = self.cursor  # read on every draw so it follows a month changed by the buttons
+        ringed_day = cursor if self._has_focus() else None
 
         header_font = font("sans", 9, "bold", master=self)
         for column, name in enumerate(WEEKDAYS_SHORT):
@@ -257,13 +348,15 @@ class DatePicker(tk.Frame):
             for column, number in enumerate(week):
                 if number == 0:
                     continue  # blank cell of another month
+                day = date(self.year, self.month, number)
                 self._draw_cell(
-                    date(self.year, self.month, number),
+                    day,
                     column * (cell_width + CELL_GAP),
                     HEADER_HEIGHT + row * (CELL_HEIGHT + CELL_GAP),
+                    ringed=day == ringed_day,
                 )
 
-    def _draw_cell(self, day: date, x: float, y: float) -> None:
+    def _draw_cell(self, day: date, x: float, y: float, *, ringed: bool = False) -> None:
         picked = day in self._selection
         free = self.in_range(day)
         cell_width = self.cell_width
@@ -299,10 +392,31 @@ class DatePicker(tk.Frame):
             font=font("sans", 10, "bold" if picked else "normal", master=self),
             fill=ink,
         )
+        if ringed:  # after the number, so the cell stays the item right before its text
+            focus_ring(
+                self.canvas,
+                x + _CELL_INSET,
+                y + _CELL_INSET,
+                x + cell_width - _CELL_INSET,
+                y + CELL_HEIGHT - _CELL_INSET,
+                _CELL_RADIUS,
+            )
+
+    def _chips_have_focus(self) -> bool:
+        focused = str(self.tk.call("focus"))
+        return focused.startswith(f"{self.chips_frame}.")
 
     def _draw_chips(self) -> None:
+        had_focus = self._chips_have_focus()
         for widget in self.chips_frame.winfo_children():
             widget.destroy()
+        self._build_chips()
+        if had_focus:
+            # The chip that had the focus has just been replaced, and Tk would send the focus
+            # to the top of the window: keep the keyboard on the grid instead.
+            self.canvas.focus_set()
+
+    def _build_chips(self) -> None:
         if self.mode != "multiple" or not self._selection:
             return
         chip_font = font("sans", 9, "bold", master=self)
@@ -345,7 +459,10 @@ class DatePicker(tk.Frame):
     def _on_click(self, event: TkEvent) -> None:
         number = self.day_at(event.x, event.y)
         if number:
-            self.toggle(date(self.year, self.month, number))
+            day = date(self.year, self.month, number)
+            if self.in_range(day):
+                self._cursor = day  # the ring, when the keyboard has the focus, follows the click
+            self.toggle(day)
 
     def _on_motion(self, event: TkEvent) -> None:
         number = self.day_at(event.x, event.y)

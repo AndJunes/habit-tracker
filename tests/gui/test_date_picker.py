@@ -7,6 +7,7 @@ import pytest
 
 from habit_tracker.ui.theme import palette
 from habit_tracker.ui.theme.cursors import DEFAULT_CURSOR, pointer_cursor
+from habit_tracker.ui.theme.focus import ACTIVATION_KEYS
 from habit_tracker.ui.widgets.date_picker import (
     CELL_GAP,
     CELL_HEIGHT,
@@ -346,3 +347,337 @@ class TestSingleMode:
         picker.on_change = lambda: calls.append(picker.dates)
         picker.toggle(nov(3))
         assert len(calls) == 1
+
+
+# ---------- Keyboard ----------
+
+
+def reachable_with_tab(widget: tk.Misc) -> bool:
+    return str(widget.cget("takefocus")).lower() in ("1", "true")
+
+
+def ring_day(picker: DatePicker) -> int | None:
+    """The day number (of the visible month) that carries the focus ring, or ``None``."""
+    canvas = picker.canvas
+    rings = [
+        item
+        for item in canvas.find_all()
+        if canvas.type(item) == "polygon"
+        and str(canvas.itemcget(item, "outline")) == palette.FOCUS_RING
+    ]
+    assert len(rings) <= 1
+    if not rings:
+        return None
+    coords = canvas.coords(rings[0])
+    xs, ys = coords[0::2], coords[1::2]
+    return picker.day_at((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)
+
+
+def give_focus_or_skip(window: tk.Toplevel, widget: tk.Misc) -> None:
+    """Gives ``widget`` the real keyboard focus, or skips the test saying why it could not."""
+    window.update()
+    widget.focus_force()
+    window.update()
+    if window.focus_get() is not widget:
+        pytest.skip("the window did not get the keyboard focus")
+
+
+def gain_focus(picker: DatePicker) -> None:
+    """Simulates the focus arriving on the grid, which is enough for what it draws."""
+    picker.canvas.event_generate("<FocusIn>")
+
+
+def chip_buttons(picker: DatePicker) -> list[SoftButton]:
+    return [w for w in picker.chips_frame.winfo_children() if isinstance(w, SoftButton)]
+
+
+class TestKeyboardCursor:
+    def test_the_month_buttons_the_grid_and_the_chips_are_reachable_with_tab_in_visual_order(
+        self, tk_root: tk.Tk
+    ) -> None:
+        picker = make_picker(tk_root, selection=[nov(5), nov(9)])
+        navigation, grid, chips = picker.winfo_children()
+        assert grid is picker.canvas
+        assert chips is picker.chips_frame
+        arrows = [w for w in navigation.winfo_children() if isinstance(w, SoftButton)]
+        assert len(arrows) == 2
+        assert len(chip_buttons(picker)) == 3  # two dates and "Quitar todas"
+        assert all(reachable_with_tab(w) for w in (*arrows, grid, *chip_buttons(picker)))
+
+    def test_the_grid_binds_the_arrows_the_page_keys_and_the_activation_keys(
+        self, tk_root: tk.Tk
+    ) -> None:
+        picker = make_picker(tk_root)
+        keys = ("<Left>", "<Right>", "<Up>", "<Down>", "<Prior>", "<Next>", *ACTIVATION_KEYS)
+        assert all(picker.canvas.bind(key) for key in keys)
+
+    @pytest.mark.parametrize(
+        ("options", "expected"),
+        [
+            pytest.param({}, TODAY, id="today-when-it-can-be-picked"),
+            pytest.param({"minimum": nov(10)}, nov(10), id="first-pickable-day-after-today"),
+            pytest.param(
+                {"maximum": date(2026, 9, 15)}, date(2026, 9, 1), id="first-pickable-day-before"
+            ),
+            pytest.param(
+                {"selection": [date(2027, 3, 4), date(2027, 1, 9)]},
+                date(2027, 1, 9),
+                id="first-picked-date-of-the-visible-month",
+            ),
+            pytest.param(
+                {"selection": [nov(5)]}, nov(5), id="picked-date-when-today-is-elsewhere"
+            ),
+            pytest.param(
+                {"selection": [nov(5)], "today": nov(20)}, nov(20), id="today-in-the-visible-month"
+            ),
+        ],
+    )
+    def test_where_the_cursor_starts(
+        self, tk_root: tk.Tk, options: dict[str, Any], expected: date
+    ) -> None:
+        picker = make_picker(tk_root, **options)
+        assert picker.cursor == expected
+        assert (picker.year, picker.month) == (expected.year, expected.month)
+
+    def test_days_and_weeks_move_the_cursor_and_the_visible_month_follows(
+        self, tk_root: tk.Tk
+    ) -> None:
+        picker = make_picker(tk_root)  # October 2026, the cursor on the 29th
+        picker.move_cursor_days(1)
+        assert (picker.cursor, picker.month) == (date(2026, 10, 30), 10)
+        picker.move_cursor_days(2)  # past the end of the month
+        assert (picker.cursor, picker.year, picker.month) == (nov(1), 2026, 11)
+        assert month_title(picker) == "noviembre 2026"
+        picker.move_cursor_days(-1)  # and back
+        assert (picker.cursor, picker.month) == (date(2026, 10, 31), 10)
+        picker.move_cursor_days(7)
+        assert (picker.cursor, picker.month) == (nov(7), 11)
+        picker.move_cursor_days(-7)
+        assert (picker.cursor, picker.month) == (date(2026, 10, 31), 10)
+
+    def test_moving_across_the_end_of_the_year_changes_the_year(self, tk_root: tk.Tk) -> None:
+        picker = make_picker(tk_root, today=date(2026, 12, 28))
+        picker.move_cursor_days(7)
+        assert picker.cursor == date(2027, 1, 4)
+        assert (picker.year, picker.month) == (2027, 1)
+        assert month_title(picker) == "enero 2027"
+        picker.move_cursor_days(-7)
+        assert (picker.cursor, picker.year, picker.month) == (date(2026, 12, 28), 2026, 12)
+
+    @pytest.mark.parametrize(
+        ("start", "months", "expected"),
+        [
+            pytest.param(date(2026, 10, 29), 1, nov(29), id="next-month"),
+            pytest.param(date(2026, 1, 31), 1, date(2026, 2, 28), id="shorter-month"),
+            pytest.param(date(2028, 1, 31), 1, date(2028, 2, 29), id="leap-february"),
+            pytest.param(date(2026, 12, 15), 1, date(2027, 1, 15), id="into-next-year"),
+            pytest.param(date(2027, 1, 15), -1, date(2026, 12, 15), id="into-previous-year"),
+            pytest.param(date(2026, 3, 31), -1, date(2026, 2, 28), id="back-to-a-shorter-month"),
+        ],
+    )
+    def test_page_keys_move_a_month_and_clamp_the_day_when_it_does_not_exist(
+        self, tk_root: tk.Tk, start: date, months: int, expected: date
+    ) -> None:
+        picker = make_picker(tk_root, today=start)
+        picker.move_cursor_months(months)
+        assert picker.cursor == expected
+        assert (picker.year, picker.month) == (expected.year, expected.month)
+
+    def test_the_month_buttons_carry_the_cursor_along(self, tk_root: tk.Tk) -> None:
+        picker = make_picker(tk_root)  # the cursor is on October 29th
+        picker.next_month()
+        assert picker.cursor == nov(29)
+        picker.previous_month()
+        picker.previous_month()
+        assert picker.cursor == date(2026, 9, 29)
+
+    def test_the_cursor_may_rest_outside_the_period_but_that_day_cannot_be_picked(
+        self, tk_root: tk.Tk
+    ) -> None:
+        changes: list[int] = []
+        picker = make_picker(
+            tk_root, today=nov(15), minimum=nov(10), maximum=nov(20),
+            on_change=lambda: changes.append(1),
+        )  # fmt: skip
+        picker.move_cursor_days(-7)
+        assert picker.cursor == nov(8)  # before the period
+        picker.toggle_cursor()
+        picker.move_cursor_days(14)
+        assert picker.cursor == nov(22)  # after it
+        picker.toggle_cursor()
+        assert picker.dates() == []
+        assert changes == []
+        picker.move_cursor_days(-12)
+        picker.toggle_cursor()
+        picker.move_cursor_days(10)
+        picker.toggle_cursor()
+        assert picker.dates() == [nov(10), nov(20)]  # the borders belong to the period
+        assert changes == [1, 1]
+
+    def test_toggling_picks_and_drops_the_day_under_the_cursor(self, tk_root: tk.Tk) -> None:
+        picker = make_picker(tk_root, today=nov(10))
+        picker.toggle_cursor()
+        picker.move_cursor_days(1)
+        picker.toggle_cursor()
+        assert picker.dates() == [nov(10), nov(11)]
+        picker.move_cursor_days(-1)
+        picker.toggle_cursor()
+        assert picker.dates() == [nov(11)]
+
+    def test_in_single_mode_toggling_leaves_exactly_one_date(self, tk_root: tk.Tk) -> None:
+        picker = make_picker(tk_root, mode="single", today=nov(10), selection=[nov(3)])
+        picker.toggle_cursor()
+        assert picker.dates() == [nov(10)]  # it replaced the other one
+        picker.move_cursor_days(1)
+        picker.toggle_cursor()
+        assert picker.dates() == [nov(11)]
+        picker.toggle_cursor()
+        assert picker.dates() == []
+
+    def test_crossing_months_clears_the_hover_but_moving_inside_one_keeps_it(
+        self, window: tk.Toplevel
+    ) -> None:
+        picker = make_picker(window)
+        picker.pack()
+        window.update()
+        x, y = TestPointer.center(picker, 2, 3)
+        picker.canvas.event_generate("<Motion>", x=int(x), y=int(y))
+        hovered = picker.hovered_day
+        assert hovered is not None
+        picker.move_cursor_days(1)  # October 30th: the same month
+        assert picker.hovered_day == hovered
+        picker.move_cursor_days(7)  # November 6th
+        assert picker.hovered_day is None
+
+
+class TestKeyboardRing:
+    def test_the_ring_marks_the_cursor_day_only_while_the_grid_has_the_focus(
+        self, window: tk.Toplevel
+    ) -> None:
+        picker = make_picker(window)
+        picker.pack()
+        window.update()
+        assert ring_day(picker) is None
+        gain_focus(picker)
+        assert ring_day(picker) == 29
+        # The cell keeps its own look: the ring is a separate item after the number.
+        assert cell_of(picker, 29) == (palette.ROW_BACKGROUND, palette.LILAC, palette.INK)
+        picker.canvas.event_generate("<FocusOut>")
+        assert ring_day(picker) is None
+
+    def test_the_ring_follows_the_cursor_across_months(self, window: tk.Toplevel) -> None:
+        picker = make_picker(window)
+        picker.pack()
+        window.update()
+        gain_focus(picker)
+        picker.move_cursor_days(7)
+        assert month_title(picker) == "noviembre 2026"
+        assert ring_day(picker) == 5
+
+    def test_the_ring_follows_the_month_buttons(self, window: tk.Toplevel) -> None:
+        picker = make_picker(window)
+        picker.pack()
+        window.update()
+        gain_focus(picker)
+        picker.next_month()
+        assert ring_day(picker) == 29
+        picker.previous_month()
+        picker.previous_month()
+        assert (picker.cursor, ring_day(picker)) == (date(2026, 9, 29), 29)
+
+    def test_the_ring_can_mark_a_day_outside_the_period(self, window: tk.Toplevel) -> None:
+        picker = make_picker(window, today=nov(15), minimum=nov(10))
+        picker.pack()
+        window.update()
+        gain_focus(picker)
+        picker.move_cursor_days(-7)
+        assert ring_day(picker) == 8
+        assert cell_of(picker, 8) == (None, "", palette.NUMBER_FUTURE)  # still dimmed
+
+    def test_hover_and_ring_are_independent(self, window: tk.Toplevel) -> None:
+        picker = make_picker(window)
+        picker.pack()
+        window.update()
+        gain_focus(picker)
+        x, y = TestPointer.center(picker, 2, 3)
+        picker.canvas.event_generate("<Motion>", x=int(x), y=int(y))
+        hovered = picker.day_at(x, y)
+        assert hovered is not None
+        assert hovered != 29
+        assert cell_of(picker, hovered) == (palette.LILAC_SOFT, "", palette.INK_TITLE)
+        assert ring_day(picker) == 29
+
+    def test_a_click_moves_the_cursor_to_the_day_without_giving_the_grid_the_focus(
+        self, window: tk.Toplevel
+    ) -> None:
+        picker = make_picker(window, selection=[nov(1)])
+        picker.pack()
+        window.update()
+        assert picker.cursor == nov(1)
+        x, y = TestPointer.center(picker, 1, 0)  # Monday the 2nd
+        picker.canvas.event_generate("<Button-1>", x=int(x), y=int(y))
+        assert picker.cursor == nov(2)
+        assert window.focus_get() is not picker.canvas
+        assert ring_day(picker) is None
+
+    def test_a_click_on_a_day_outside_the_period_leaves_the_cursor_where_it_was(
+        self, window: tk.Toplevel
+    ) -> None:
+        picker = make_picker(window, today=nov(15), minimum=nov(10))
+        picker.pack()
+        window.update()
+        x, y = TestPointer.center(picker, 1, 2)  # Wednesday the 4th, before the period
+        picker.canvas.event_generate("<Button-1>", x=int(x), y=int(y))
+        assert picker.cursor == nov(15)
+        assert picker.dates() == []
+
+
+class TestKeyboardFocus:
+    def test_removing_a_date_with_the_mouse_does_not_give_the_grid_the_focus(
+        self, window: tk.Toplevel
+    ) -> None:
+        picker = make_picker(window, selection=[nov(5), nov(9)])
+        picker.pack()
+        window.update()
+        chip_buttons(picker)[0].command()  # what a click on its ✕ does
+        assert picker.dates() == [nov(9)]
+        assert window.focus_get() is not picker.canvas
+
+    def test_removing_a_date_from_its_chip_keeps_the_keyboard_in_the_picker(
+        self, window: tk.Toplevel
+    ) -> None:
+        picker = make_picker(window, selection=[nov(5), nov(9)])
+        picker.pack()
+        give_focus_or_skip(window, chip_buttons(picker)[0])
+        chip_buttons(picker)[0].event_generate("<space>")
+        assert picker.dates() == [nov(9)]
+        window.update()
+        # The chip with the focus was replaced; without this the focus would jump to the top.
+        assert window.focus_get() is picker.canvas
+
+    def test_real_keys_move_the_cursor_across_months(self, window: tk.Toplevel) -> None:
+        picker = make_picker(window)
+        picker.pack()
+        give_focus_or_skip(window, picker.canvas)
+        canvas = picker.canvas
+        canvas.event_generate("<Right>")  # October 30th
+        canvas.event_generate("<Down>")  # November 6th
+        canvas.event_generate("<Prior>")  # October 6th
+        canvas.event_generate("<Next>")  # November 6th
+        assert picker.cursor == nov(6)
+        canvas.event_generate("<Left>")  # the 5th
+        canvas.event_generate("<Up>")  # October 29th
+        assert picker.cursor == TODAY
+        assert (picker.year, picker.month) == (2026, 10)
+
+    @pytest.mark.parametrize("key", ACTIVATION_KEYS)
+    def test_space_and_enter_pick_and_drop_the_day_under_the_cursor(
+        self, window: tk.Toplevel, key: str
+    ) -> None:
+        picker = make_picker(window, today=nov(10))
+        picker.pack()
+        give_focus_or_skip(window, picker.canvas)
+        picker.canvas.event_generate(key)
+        assert picker.dates() == [nov(10)]
+        picker.canvas.event_generate(key)
+        assert picker.dates() == []
