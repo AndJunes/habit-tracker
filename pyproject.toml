@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "habit-tracker"
+version = "0.1.0"
+description = "A desktop habit tracker with a soft, guilt-free design. Tkinter only, no runtime dependencies."
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Andrea Junes" }]
+classifiers = [
+  "Private :: Do Not Upload",
+  "Programming Language :: Python :: 3",
+  "Operating System :: MacOS",
+]
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "pytest>=9",
+  "coverage>=7.17",
+  "mypy>=2",
+  "ruff>=0.17",
+  "pre-commit",
+  { include-group = "tools" },
+]
+tools = ["pillow"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 99
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "C4", "PT", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+packages = ["habit_tracker"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "--import-mode=importlib"]
+markers = ["gui: needs a display; skipped with a visible reason when there is none"]
+
+[tool.coverage.run]
+source = ["habit_tracker"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
