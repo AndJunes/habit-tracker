@@ -8,6 +8,7 @@ from typing import Literal
 from ..theme import palette
 from ..theme.cursors import DEFAULT_CURSOR, pointer_cursor
 from ..theme.drawing import mix_colors, rounded_rect, trash_can
+from ..theme.focus import activate_with_keys, focus_ring, track_focus
 from ..theme.fonts import font, measure
 from ..theme.tkutil import TkEvent
 
@@ -22,8 +23,11 @@ class SoftButton(tk.Canvas):
     """A flat button with rounded corners.
 
     With ``enabled=False`` it is drawn the same way (with whatever muted colors it
-    is given) but has no pointer cursor and no click: the action is visible, though
-    it cannot be used yet.
+    is given) but has no pointer cursor, no click and no keyboard access: the action
+    is visible, though it cannot be used yet.
+
+    Enabled, it can be reached with Tab and pressed with Space or Enter; the focus ring
+    shows only while the keyboard has the focus.
     """
 
     def __init__(
@@ -57,17 +61,33 @@ class SoftButton(tk.Canvas):
         self.text_color = text_color
         self.text = text
         self.radius = radius
-        self._draw(self.background)
+        self._hovered = False
+        self._has_focus: Callable[[], bool] = lambda: False
+        if enabled:
+            self._has_focus = track_focus(self, self._redraw)
+        else:
+            self.configure(takefocus=False)
+        self._redraw()
         if enabled:
             self.bind("<Button-1>", lambda _event: self.command())
-            self.bind("<Enter>", lambda _event: self._draw(self.hover_background))
-            self.bind("<Leave>", lambda _event: self._draw(self.background))
+            self.bind("<Enter>", lambda _event: self._set_hovered(True))
+            self.bind("<Leave>", lambda _event: self._set_hovered(False))
+            activate_with_keys(self, lambda: self.command())
+
+    def _set_hovered(self, hovered: bool) -> None:
+        self._hovered = hovered
+        self._redraw()
+
+    def _redraw(self) -> None:
+        self._draw(self.hover_background if self._hovered else self.background)
 
     def _draw(self, fill: str) -> None:
         self.delete("all")
         width = int(self["width"])
         height = int(self["height"])
         rounded_rect(self, 1, 1, width - 1, height - 1, self.radius, fill=fill, outline="")
+        if self._has_focus():
+            focus_ring(self, 1, 1, width - 1, height - 1, self.radius)
         self.create_text(
             width / 2, height / 2, text=self.text, font=self.button_font, fill=self.text_color
         )
@@ -83,7 +103,8 @@ class TrashButton(tk.Canvas):
     * ``"inactive"``: switched off; visible, but it neither responds nor shows the pointer.
 
     A click deletes nothing: it only calls ``command``. The view decides what it
-    means (normally, toggling the selection).
+    means (normally, toggling the selection). Space and Enter do the same as a click, and
+    the button can be reached with Tab in every state but ``"inactive"``.
     """
 
     SIDE = 36
@@ -103,15 +124,23 @@ class TrashButton(tk.Canvas):
         self.state: TrashState = state
         self.hovered = False
         self._pointer = pointer_cursor(master)
+        self._has_focus = track_focus(self, self._draw)
+        self._sync_reachability()
         self._draw()
         self.bind("<Button-1>", self._on_click)
         self.bind("<Enter>", lambda _event: self._set_hovered(True))
         self.bind("<Leave>", lambda _event: self._set_hovered(False))
+        activate_with_keys(self, lambda: self._on_click(None))
 
     def set_state(self, state: TrashState) -> None:
         """Switches between ``"normal"``, ``"active"`` and ``"inactive"`` and redraws."""
         self.state = state
+        self._sync_reachability()
         self._draw()
+
+    def _sync_reachability(self) -> None:
+        """An inactive button is skipped by Tab, like it ignores the pointer."""
+        self.configure(takefocus=self.state != "inactive")
 
     def _on_click(self, _event: TkEvent | None) -> None:
         if self.state != "inactive":
@@ -141,4 +170,6 @@ class TrashButton(tk.Canvas):
         rounded_rect(
             self, 1, 1, self.SIDE - 1, self.SIDE - 1, self._RADIUS, fill=fill, outline=border
         )
+        if self._has_focus():
+            focus_ring(self, 1, 1, self.SIDE - 1, self.SIDE - 1, self._RADIUS)
         trash_can(self, cx=self.SIDE / 2, cy=self.SIDE / 2, scale=1.0, color=can_color)

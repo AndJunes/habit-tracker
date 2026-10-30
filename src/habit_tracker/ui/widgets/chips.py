@@ -6,6 +6,7 @@ from collections.abc import Callable
 from ..theme import palette
 from ..theme.cursors import pointer_cursor
 from ..theme.drawing import mix_colors, rounded_rect
+from ..theme.focus import activate_with_keys, focus_ring, track_focus
 from ..theme.fonts import FontWeight, font, measure
 
 _RADIUS = 10
@@ -24,6 +25,9 @@ class SelectionChip(tk.Canvas):
     white with the theme border, and it hints at being clickable under the pointer.
     The group is coordinated by the view: the chip only reports its click and knows
     how to draw itself selected or not (:meth:`set_selected`).
+
+    It can be reached with Tab and pressed with Space or Enter, which report to the command
+    like a click; the focus ring shows only while the keyboard has the focus.
     """
 
     def __init__(
@@ -51,10 +55,12 @@ class SelectionChip(tk.Canvas):
         self._chip_height = height
         self.selected = False
         self.hovered = False
+        self._has_focus = track_focus(self, self._draw)
         self._draw()
         self.bind("<Button-1>", lambda _event: self.command())
         self.bind("<Enter>", lambda _event: self._set_hovered(True))
         self.bind("<Leave>", lambda _event: self._set_hovered(False))
+        activate_with_keys(self, lambda: self.command())
 
     def set_selected(self, selected: bool) -> None:
         """Draws the chip as selected or not."""
@@ -79,6 +85,8 @@ class SelectionChip(tk.Canvas):
             self, 1, 1, self._chip_width - 1, self._chip_height - 1, _RADIUS,
             fill=fill, outline=border,
         )  # fmt: skip
+        if self._has_focus():
+            focus_ring(self, 1, 1, self._chip_width - 1, self._chip_height - 1, _RADIUS)
 
         chip_font = font("sans", 9, weight, master=self)
         text_width = measure(chip_font, self.text)
