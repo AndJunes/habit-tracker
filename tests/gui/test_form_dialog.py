@@ -1142,6 +1142,27 @@ def test_focusing_a_widget_that_is_already_in_view_does_not_scroll(
     assert dialog._scroller.yview()[0] == 0.0
 
 
+def test_the_focus_reported_to_a_frame_does_not_scroll(
+    tk_root: tk.Tk, service: HabitService
+) -> None:
+    dialog = HabitFormDialog(tk_root, service, on_saved=lambda saved: None)
+    show_invisibly(dialog)
+    scroller = dialog._scroller
+    if dialog._page.winfo_reqheight() <= scroller.winfo_height():
+        pytest.skip("the whole form fits in the window, so there is nothing to scroll")
+    last_widget_of_the_body(dialog).event_generate("<FocusIn>")
+    dialog.update()
+    position = scroller.yview()
+    assert position[0] > 0.0
+    (body,) = dialog._page.winfo_children()
+
+    # Tk reports the focus to the ancestors of the focused widget too, the body among them.
+    body.event_generate("<FocusIn>")
+    dialog.update()
+
+    assert scroller.yview() == position
+
+
 def test_focusing_a_button_of_the_footer_does_not_scroll(
     tk_root: tk.Tk, service: HabitService
 ) -> None:

@@ -241,10 +241,14 @@ class HabitFormDialog(tk.Toplevel):
     def _on_focus_in(self, event: TkEvent) -> None:
         """Scroll so that the widget that just got the focus (with Tab, say) is in view."""
         widget = event.widget
+        # Tk also reports the focus to every ancestor of the widget that took it, and no frame
+        # takes it itself: scrolling to the body or to a section would pull the view away from
+        # the field being used.
+        if not isinstance(widget, tk.Misc) or isinstance(widget, tk.Frame | tk.LabelFrame):
+            return
         # The list of a menu is a window of its own, and the footer does not scroll.
-        if isinstance(widget, tk.Misc) and widget.winfo_toplevel() is self:
-            # When the window opens the first focus arrives before the layout has settled, so
-            # the position of the widget is read once it has.
+        if widget.winfo_toplevel() is self:
+            # The position is read once the layout has settled, in case the widget just moved.
             self.after_idle(self._scroll_to, widget)
 
     def _scroll_to(self, widget: tk.Misc) -> None:
