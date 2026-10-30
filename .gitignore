@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+
+# Tool caches and reports
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# macOS
+.DS_Store
+
+# Personal data. The app stores it in the platform data directory, never in
+# the repository; these entries cover the data file written by versions that
+# predate the SQLite store, and its migration backups.
+habitos.json
+habitos.json.respaldo*
+*.sqlite3
+
+# Local secrets
+.env
+.env.*
+
+# Editors
+.idea/
+.vscode/
