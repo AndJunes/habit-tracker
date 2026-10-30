@@ -29,7 +29,7 @@ from ...ports import StorageError
 from ...service import HabitService
 from ..theme import palette
 from ..theme.fonts import font
-from ..theme.tkutil import TkEvent
+from ..theme.tkutil import TkEvent, widget_exists
 from ..widgets.scrollbar import SoftScrollbar, bind_mousewheel
 from ..widgets.soft_button import SoftButton
 from ..widgets.soft_menu import menu_manager
@@ -243,6 +243,12 @@ class HabitFormDialog(tk.Toplevel):
         widget = event.widget
         # The list of a menu is a window of its own, and the footer does not scroll.
         if isinstance(widget, tk.Misc) and widget.winfo_toplevel() is self:
+            # When the window opens the first focus arrives before the layout has settled, so
+            # the position of the widget is read once it has.
+            self.after_idle(self._scroll_to, widget)
+
+    def _scroll_to(self, widget: tk.Misc) -> None:
+        if widget_exists(self) and widget_exists(widget):
             scroll_into_view(self._scroller, self._page, widget)
 
     def _place(self, master: tk.Misc) -> None:
