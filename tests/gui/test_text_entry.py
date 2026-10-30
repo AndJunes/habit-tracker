@@ -11,7 +11,7 @@ def test_the_entry_uses_the_theme_colors_and_font(tk_root: tk.Tk) -> None:
     assert entry.cget("bg") == palette.WHITE
     assert entry.cget("fg") == palette.INK
     assert entry.cget("highlightbackground") == palette.BORDER
-    assert entry.cget("highlightcolor") == palette.LILAC
+    assert entry.cget("highlightcolor") == palette.FOCUS_RING
     assert entry.cget("insertbackground") == palette.INK
     assert int(entry.cget("highlightthickness")) == 1
     assert str(entry.cget("font")) == str(font("sans", 11, master=tk_root))
