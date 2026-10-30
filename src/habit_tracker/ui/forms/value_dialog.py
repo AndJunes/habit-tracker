@@ -1,4 +1,8 @@
-"""The small dialog that asks how much was done when a measured habit is marked."""
+"""The small dialog that asks how much was done when a measured habit is marked.
+
+It works with the keyboard alone: the field has the focus when it opens, Enter accepts the number,
+Escape cancels, and Tab goes on to the two buttons.
+"""
 
 import tkinter as tk
 from datetime import date
@@ -6,6 +10,7 @@ from datetime import date
 from ...domain.models import Habit, Measurement
 from ..theme import palette
 from ..theme.fonts import font
+from ..theme.tkutil import TkEvent
 from ..widgets.soft_button import SoftButton
 from ..widgets.text_entry import themed_entry
 from . import texts
@@ -118,6 +123,9 @@ class ValueDialog(tk.Toplevel):
         )
 
         self._entry.bind("<Return>", lambda _event: self.submit())
+        # On the dialog, not the field: the Toplevel is in the bindtags of all its widgets, so
+        # Escape cancels wherever the focus is (also on the buttons).
+        self.bind("<Escape>", self._on_escape)
         self._entry.focus()
         self._entry.selection_range(0, "end")
         self.after(0, lambda: make_modal(self))
@@ -126,6 +134,14 @@ class ValueDialog(tk.Toplevel):
     def error_text(self) -> str:
         """What the dialog says about the last attempt: empty unless the number was rejected."""
         return str(self._error_label.cget("text"))
+
+    def cancel(self) -> None:
+        """Close without a result, as the Cancel button does."""
+        self.destroy()
+
+    def _on_escape(self, _event: TkEvent) -> str:
+        self.cancel()
+        return "break"
 
     def submit(self) -> None:
         """Accepts the number and closes; an invalid one is reported without closing."""

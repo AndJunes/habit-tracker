@@ -32,6 +32,7 @@ from habit_tracker.ui.forms.habit_form import (
     HabitFormDialog,
 )
 from habit_tracker.ui.forms.parts import WeekdayChipRow
+from habit_tracker.ui.forms.scrolling import SCROLL_MARGIN, scroll_into_view
 from habit_tracker.ui.theme import palette
 from habit_tracker.ui.theme.tkutil import widget_exists
 from habit_tracker.ui.widgets.chips import SelectionChip
@@ -997,3 +998,287 @@ def test_make_modal_does_nothing_for_a_window_that_was_closed(tk_root: tk.Tk) ->
     top = tk.Toplevel(tk_root)
     top.destroy()
     modal.make_modal(top)  # no error, no retry
+
+
+# ================= The keyboard =================
+
+
+def show_invisibly(dialog: HabitFormDialog) -> None:
+    """Map the dialog, fully transparent, so that its widgets get a real layout."""
+    dialog.attributes("-alpha", 0.0)
+    dialog.update()
+    if not dialog.winfo_viewable():
+        dialog.destroy()
+        pytest.skip("windows cannot be mapped in this environment, so there is no layout")
+
+
+def last_widget_of_the_body(dialog: HabitFormDialog) -> tk.Misc:
+    """The last widget of the form's scrolling body: the one furthest from the top."""
+    (body,) = dialog._page.winfo_children()
+    return body.winfo_children()[-1]
+
+
+def test_escape_closes_the_form_without_saving(
+    service: HabitService, open_form: Callable[..., FormDriver], fake_event: Callable[..., object]
+) -> None:
+    form = open_form(service, name="No lo guardes")
+    assert form.dialog.bind("<Escape>")
+
+    handled = form.dialog._on_escape(fake_event())
+
+    assert handled == "break"
+    assert not form.is_open
+    assert form.saved == []
+    assert service.habits() == ()
+
+
+def test_escape_closes_an_open_menu_first_and_the_form_with_the_next_one(
+    service: HabitService, open_form: Callable[..., FormDriver], fake_event: Callable[..., object]
+) -> None:
+    form = open_form(service, name="Con menú")
+    menu = form.menu(FREQUENCY_MENU)
+    menu.open()
+    assert menu.popup is not None
+
+    # With a list open the form leaves the key to the list, which closes itself with it.
+    assert form.dialog._on_escape(fake_event()) is None
+    assert form.is_open
+    menu.close()
+
+    assert form.dialog._on_escape(fake_event()) == "break"
+    assert not form.is_open
+
+
+def test_the_form_binds_escape_before_a_menu_adds_its_own(
+    service: HabitService, open_form: Callable[..., FormDriver]
+) -> None:
+    def escape_lines() -> list[str]:
+        return [line for line in form.dialog.bind("<Escape>").splitlines() if line.strip()]
+
+    form = open_form(service, name="Orden")
+    menu = form.menu(FREQUENCY_MENU)
+    before = escape_lines()
+    assert len(before) == 1
+
+    menu.open()
+    try:
+        while_open = escape_lines()
+    finally:
+        menu.close()
+
+    # The menu appends its binding: the form's one still runs first, and sees the open list.
+    assert len(while_open) == 2
+    assert while_open[0] == before[0]
+    assert escape_lines() == before  # and closing takes away only the menu's own
+
+
+def test_the_escape_key_closes_the_form(tk_root: tk.Tk, service: HabitService) -> None:
+    dialog = HabitFormDialog(tk_root, service, on_saved=lambda saved: None)
+    show_invisibly(dialog)
+    dialog.focus_force()
+    dialog.update()
+    focused = dialog.focus_get()
+    if focused is None:
+        dialog.destroy()
+        pytest.skip("the window did not get the keyboard focus")
+
+    focused.event_generate("<Escape>")
+
+    assert not widget_exists(dialog)
+
+
+def test_focusing_a_widget_far_below_scrolls_the_form_until_it_is_in_view(
+    tk_root: tk.Tk, service: HabitService
+) -> None:
+    dialog = HabitFormDialog(tk_root, service, on_saved=lambda saved: None)
+    show_invisibly(dialog)
+    scroller = dialog._scroller
+    if dialog._page.winfo_reqheight() <= scroller.winfo_height():
+        pytest.skip("the whole form fits in the window, so there is nothing to scroll")
+    far = last_widget_of_the_body(dialog)
+    assert scroller.yview()[0] == 0.0
+
+    far.event_generate("<FocusIn>")
+    dialog.update()
+
+    assert scroller.yview()[0] > 0.0
+    top = far.winfo_rooty() - scroller.winfo_rooty()
+    assert top >= 0
+    assert top + far.winfo_height() <= scroller.winfo_height()
+
+
+def test_focusing_a_widget_above_the_view_scrolls_back_up_to_it(
+    tk_root: tk.Tk, service: HabitService
+) -> None:
+    dialog = HabitFormDialog(tk_root, service, on_saved=lambda saved: None)
+    show_invisibly(dialog)
+    scroller = dialog._scroller
+    if dialog._page.winfo_reqheight() <= scroller.winfo_height():
+        pytest.skip("the whole form fits in the window, so there is nothing to scroll")
+    last_widget_of_the_body(dialog).event_generate("<FocusIn>")
+    dialog.update()
+    scrolled_down = scroller.yview()[0]
+    assert scrolled_down > 0.0
+    name = FormDriver(dialog).entry(TextField.NAME)
+
+    name.event_generate("<FocusIn>")
+    dialog.update()
+
+    assert scroller.yview()[0] < scrolled_down
+    top = name.winfo_rooty() - scroller.winfo_rooty()
+    assert 0 <= top < scroller.winfo_height()
+
+
+def test_focusing_a_widget_that_is_already_in_view_does_not_scroll(
+    tk_root: tk.Tk, service: HabitService
+) -> None:
+    dialog = HabitFormDialog(tk_root, service, on_saved=lambda saved: None)
+    show_invisibly(dialog)
+    name = FormDriver(dialog).entry(TextField.NAME)
+
+    name.event_generate("<FocusIn>")
+    dialog.update()
+
+    assert dialog._scroller.yview()[0] == 0.0
+
+
+def test_focusing_a_button_of_the_footer_does_not_scroll(
+    tk_root: tk.Tk, service: HabitService
+) -> None:
+    dialog = HabitFormDialog(tk_root, service, on_saved=lambda saved: None)
+    show_invisibly(dialog)
+    scroller = dialog._scroller
+    if dialog._page.winfo_reqheight() <= scroller.winfo_height():
+        pytest.skip("the whole form fits in the window, so there is nothing to scroll")
+    last_widget_of_the_body(dialog).event_generate("<FocusIn>")
+    dialog.update()
+    position = scroller.yview()
+
+    FormDriver(dialog).button("Crear hábito").event_generate("<FocusIn>")
+    dialog.update()
+
+    assert scroller.yview() == position
+
+
+def tab_stops_after(start: tk.Misc) -> list[tk.Misc]:
+    """What Tab visits after ``start``, in order, until it comes back to ``start``."""
+    visited: list[tk.Misc] = []
+    current = start.tk_focusNext()
+    while current is not None and current is not start and len(visited) < 500:
+        visited.append(current)
+        current = current.tk_focusNext()
+    return visited
+
+
+def test_tab_visits_the_fields_in_order_and_ends_on_the_buttons_of_the_footer(
+    tk_root: tk.Tk, service: HabitService
+) -> None:
+    dialog = HabitFormDialog(tk_root, service, on_saved=lambda saved: None)
+    show_invisibly(dialog)
+    form = FormDriver(dialog)
+    name, motivation = form.entry(TextField.NAME), form.entry(TextField.DESCRIPTION)
+    cancel, save = form.button("Cancelar"), form.button("Crear hábito")
+
+    stops = tab_stops_after(name)
+
+    assert stops[0] is motivation
+    assert stops[1] is form.chip("Salud")  # the first area comes next
+    assert stops[-2:] == [cancel, save]  # the footer comes after the whole body
+    assert save.tk_focusNext() is name  # and the round closes on the first field
+
+
+class ScrollArea:
+    """A small canvas with ten blocks of 40 px hung from a page, to scroll in pixels."""
+
+    VIEW_HEIGHT = 100
+    BLOCK_HEIGHT = 40
+
+    def __init__(self, master: tk.Misc) -> None:
+        self.canvas = tk.Canvas(
+            master, width=200, height=self.VIEW_HEIGHT, yscrollincrement=1, highlightthickness=0
+        )
+        self.canvas.pack()
+        self.page = tk.Frame(self.canvas)
+        self.canvas.create_window(0, 0, anchor="nw", window=self.page)
+        self.blocks = [tk.Frame(self.page, width=100, height=self.BLOCK_HEIGHT) for _ in range(10)]
+        for block in self.blocks:
+            block.pack()
+        master.update()
+        self.canvas.configure(scrollregion=(0, 0, 200, 10 * self.BLOCK_HEIGHT))
+
+    @property
+    def top(self) -> float:
+        """Where the visible area starts, in pixels of the page."""
+        return float(self.canvas.canvasy(0))
+
+
+class TestScrollIntoView:
+    def test_a_widget_below_the_view_ends_with_the_margin_under_it(
+        self, window: tk.Toplevel
+    ) -> None:
+        area = ScrollArea(window)
+        block = area.blocks[5]  # from 200 to 240 on a view of 100
+
+        scroll_into_view(area.canvas, area.page, block)
+
+        bottom = 6 * area.BLOCK_HEIGHT
+        assert area.top == bottom + SCROLL_MARGIN - area.VIEW_HEIGHT
+
+    def test_a_widget_above_the_view_ends_with_the_margin_over_it(
+        self, window: tk.Toplevel
+    ) -> None:
+        area = ScrollArea(window)
+        area.canvas.yview_moveto(1.0)
+
+        scroll_into_view(area.canvas, area.page, area.blocks[1])
+
+        assert area.top == area.BLOCK_HEIGHT - SCROLL_MARGIN
+
+    def test_a_widget_already_in_view_does_not_move_it(self, window: tk.Toplevel) -> None:
+        area = ScrollArea(window)
+
+        scroll_into_view(area.canvas, area.page, area.blocks[1])
+
+        assert area.top == 0
+
+    def test_it_never_pushes_the_top_of_a_tall_widget_out_of_view(
+        self, window: tk.Toplevel
+    ) -> None:
+        area = ScrollArea(window)
+        tall = tk.Frame(area.page, width=100, height=250)
+        tall.pack()
+        window.update()
+        area.canvas.configure(scrollregion=(0, 0, 200, 10 * area.BLOCK_HEIGHT + 250))
+
+        scroll_into_view(area.canvas, area.page, tall)
+
+        assert area.top == 10 * area.BLOCK_HEIGHT - SCROLL_MARGIN
+
+    def test_a_custom_margin_is_respected(self, window: tk.Toplevel) -> None:
+        area = ScrollArea(window)
+
+        scroll_into_view(area.canvas, area.page, area.blocks[5], margin=0)
+
+        assert area.top == 6 * area.BLOCK_HEIGHT - area.VIEW_HEIGHT
+
+    def test_a_widget_that_is_not_under_the_page_is_ignored(self, window: tk.Toplevel) -> None:
+        area = ScrollArea(window)
+        outside = tk.Frame(window, width=50, height=500)
+        outside.pack()
+        window.update()
+
+        scroll_into_view(area.canvas, area.page, outside)
+
+        assert area.top == 0
+
+    def test_nothing_happens_before_the_canvas_has_a_layout(self, tk_root: tk.Tk) -> None:
+        canvas = tk.Canvas(tk_root, width=200, height=100, yscrollincrement=1)
+        page = tk.Frame(canvas)
+        canvas.create_window(0, 0, anchor="nw", window=page)
+        block = tk.Frame(page, width=100, height=40)
+        block.pack()
+        canvas.configure(scrollregion=(0, 0, 200, 1000))
+
+        scroll_into_view(canvas, page, block)  # the canvas is not mapped: its height is 1
+
+        assert canvas.canvasy(0) == 0

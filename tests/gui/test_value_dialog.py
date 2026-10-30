@@ -201,3 +201,66 @@ class TestAskValue:
         with pytest.raises(ValueError, match="measured"):
             ask_value(tk_root, plain, DAY)
         assert not [w for w in tk_root.winfo_children() if isinstance(w, ValueDialog)]
+
+
+class TestKeyboard:
+    def test_escape_cancels_like_the_cancel_button(
+        self, tk_root: tk.Tk, fake_event: Callable[..., object]
+    ) -> None:
+        dialog = open_dialog(tk_root)
+        assert dialog.bind("<Escape>")
+        type_value(dialog, "12")
+
+        handled = dialog._on_escape(fake_event())
+
+        assert handled == "break"
+        assert dialog.result is None  # what was typed is not delivered
+        assert not widget_exists(dialog)
+
+    def test_cancel_closes_without_a_result(self, tk_root: tk.Tk) -> None:
+        dialog = open_dialog(tk_root)
+
+        dialog.cancel()
+
+        assert dialog.result is None
+        assert not widget_exists(dialog)
+
+    def test_ask_value_returns_none_when_the_dialog_is_cancelled_with_escape(
+        self, tk_root: tk.Tk, fake_event: Callable[..., object]
+    ) -> None:
+        answer_when_open(tk_root, lambda dialog: dialog._on_escape(fake_event()))
+
+        assert ask_value(tk_root, measured(), DAY) is None
+
+    def test_enter_still_accepts_from_the_field(self, tk_root: tk.Tk) -> None:
+        dialog = open_dialog(tk_root)
+
+        assert value_entry(dialog).bind("<Return>")
+
+    def test_tab_goes_from_the_field_to_cancel_and_then_to_register(self, tk_root: tk.Tk) -> None:
+        dialog = ValueDialog(tk_root, measured(), DAY)
+        dialog.attributes("-alpha", 0.0)
+        dialog.update()
+        if not dialog.winfo_viewable():
+            dialog.destroy()
+            pytest.skip("windows cannot be mapped in this environment, so there is no layout")
+        buttons = {w.text: w for w in descendants(dialog) if isinstance(w, SoftButton)}
+
+        assert value_entry(dialog).tk_focusNext() is buttons["Cancelar"]
+        assert buttons["Cancelar"].tk_focusNext() is buttons["Registrar"]
+
+    def test_the_escape_key_cancels_from_the_field(self, tk_root: tk.Tk) -> None:
+        dialog = ValueDialog(tk_root, measured(), DAY)
+        dialog.attributes("-alpha", 0.0)
+        dialog.update()
+        dialog.focus_force()
+        dialog.update()
+        focused = dialog.focus_get()
+        if focused is None:
+            dialog.destroy()
+            pytest.skip("the window did not get the keyboard focus")
+
+        focused.event_generate("<Escape>")
+
+        assert dialog.result is None
+        assert not widget_exists(dialog)

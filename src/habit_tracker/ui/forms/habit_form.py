@@ -12,6 +12,10 @@ the widgets, so changing an option never loses what was chosen for another one. 
 builds the habit and checks what is the form's to check; the service checks the rest. Any
 problem is written in the footer without closing the dialog or clearing anything: the dialog
 closes only after the habit was stored.
+
+The keyboard reaches everything: Tab goes through the fields in the order they are drawn (the
+body first, then the footer's buttons), the scrolling area follows the focus so that the field
+being used is always in view, and Escape closes the dialog without saving.
 """
 
 import logging
@@ -25,12 +29,15 @@ from ...ports import StorageError
 from ...service import HabitService
 from ..theme import palette
 from ..theme.fonts import font
+from ..theme.tkutil import TkEvent
 from ..widgets.scrollbar import SoftScrollbar, bind_mousewheel
 from ..widgets.soft_button import SoftButton
+from ..widgets.soft_menu import menu_manager
 from . import texts
 from .form_state import FormError, FormState, describe_error
 from .modal import make_modal
 from .parts import FORM_WIDTH, LABEL_SIZE, PADDING, PAGE_WIDTH
+from .scrolling import scroll_into_view
 from .section_advanced import AdvancedSection
 from .section_basics import AreaSection, HeaderSection, NameSection, NotesSection
 from .section_frequency import FrequencySection
@@ -80,7 +87,7 @@ class HabitFormDialog(tk.Toplevel):
         self.resizable(False, True)
 
         self._error_label = self._build_footer()
-        self._scroller, body = self._build_scroll_area()
+        self._scroller, self._page, body = self._build_scroll_area()
 
         HeaderSection(body, state)
         self._name = NameSection(
@@ -107,6 +114,7 @@ class HabitFormDialog(tk.Toplevel):
         self._place(master)
         self._refresh_preview()
         self._name.focus()
+        self._bind_keyboard()
         self.after(0, lambda: make_modal(self))
 
     @property
@@ -179,8 +187,8 @@ class HabitFormDialog(tk.Toplevel):
         ).pack(side="right")
         return error_label
 
-    def _build_scroll_area(self) -> tuple[tk.Canvas, tk.Frame]:
-        """The scrolling area above the footer. Returns its canvas and the body inside it."""
+    def _build_scroll_area(self) -> tuple[tk.Canvas, tk.Frame, tk.Frame]:
+        """The scrolling area above the footer. Returns its canvas, its page and the body."""
         # The theme's scrollbar and the same wheel and trackpad handling as the dashboard.
         holder = tk.Frame(self, bg=palette.PAPER)
         holder.pack(side="top", fill="both", expand=True)
@@ -207,10 +215,35 @@ class HabitFormDialog(tk.Toplevel):
 
         body = tk.Frame(page, bg=palette.PAPER)
         body.pack(fill="x", padx=PADDING, pady=_BODY_PADDING)
-        return scroller, body
+        return scroller, page, body
 
     def _scroll(self, *order: Any) -> None:
         self._scroller.yview(*order)
+
+    # ---------- The keyboard ----------
+
+    def _bind_keyboard(self) -> None:
+        # Bindings on the dialog hear all of its widgets: the Toplevel is in their bindtags.
+        # The Escape binding goes first, ahead of the one a menu adds to this same dialog
+        # while its list is open (see ``_on_escape``).
+        self.bind("<Escape>", self._on_escape)
+        self.bind("<FocusIn>", self._on_focus_in, add="+")
+
+    def _on_escape(self, _event: TkEvent) -> str | None:
+        """Close the dialog without saving, as the Cancel button does."""
+        if menu_manager(self).open_menu is not None:
+            # An open list listens to this key as well, from a binding added after this one:
+            # it closes the list, and the dialog stays for another Escape.
+            return None
+        self.destroy()
+        return "break"
+
+    def _on_focus_in(self, event: TkEvent) -> None:
+        """Scroll so that the widget that just got the focus (with Tab, say) is in view."""
+        widget = event.widget
+        # The list of a menu is a window of its own, and the footer does not scroll.
+        if isinstance(widget, tk.Misc) and widget.winfo_toplevel() is self:
+            scroll_into_view(self._scroller, self._page, widget)
 
     def _place(self, master: tk.Misc) -> None:
         """Sizes the dialog to the screen and opens it near the top of its parent."""
