@@ -37,8 +37,14 @@ from ..widgets.soft_button import SoftButton, TrashButton, TrashState
 from . import habit_labels, texts
 from .helpers import (
     EDIT_SEQUENCES,
+    FOCUS_RING_INSET,
+    ROW_FOCUS,
+    TRASH_FOCUS,
+    Box,
+    FocusMemory,
     clear_children,
     for_habit,
+    make_reachable,
     muted_icon_color,
     new_canvas,
     noop,
@@ -54,6 +60,12 @@ _HEADER_HEIGHT = 62
 _RING_BOX = 58
 _ROW_GAP = 8
 _ROW_RADIUS = 14
+_ROW_FOCUS_BOX: Box = (
+    FOCUS_RING_INSET,
+    FOCUS_RING_INSET,
+    CONTENT_WIDTH - FOCUS_RING_INSET,
+    ROW_HEIGHT - FOCUS_RING_INSET,
+)
 _ROW_ICON_RADIUS = 17
 _ROW_ICON_X = 31
 _ROW_CENTER_Y = 28
@@ -120,6 +132,7 @@ class TodayView(tk.Frame):
         self.delete_mode = DeleteMode(
             service, self.actions, on_change=self.refresh, dialogs=dialogs
         )
+        self._focus = FocusMemory()  # keeps the keyboard focus on a row across redraws
 
         # The sections that depend on the data are frames that refresh() empties and fills
         # again; the priority card is built once because it holds what the person is typing.
@@ -228,8 +241,14 @@ class TodayView(tk.Frame):
     # ---------- The list ----------
 
     def _draw_list(self, today: date) -> None:
-        """A rounded row per habit, or the invitation to create the first one."""
+        """Draw the list again, keeping the keyboard focus on the row that had it."""
+        self._focus.begin(self)
         clear_children(self.list_frame)
+        self._fill_list(today)
+        self._focus.restore()
+
+    def _fill_list(self, today: date) -> None:
+        """A rounded row per habit, or the invitation to create the first one."""
         habits = self.service.habits()
         if not habits:
             tk.Label(
@@ -278,6 +297,7 @@ class TodayView(tk.Frame):
             # and no click to mark. No guilt, it simply is not its day.
             self._draw_muted_row(canvas, habit, color, today)
             self._bind_edit(canvas, habit)  # editing still works on a dimmed row
+            canvas.configure(takefocus=False)  # nothing to do with the keyboard: skip it with Tab
             return
 
         done = habit.is_done(today)
@@ -310,6 +330,7 @@ class TodayView(tk.Frame):
         canvas.configure(cursor=pointer_cursor(canvas))
         canvas.bind("<Button-1>", for_habit(self.actions.toggle, habit))
         self._bind_edit(canvas, habit)
+        self._make_reachable(canvas, habit, self.actions.toggle, editable=True)
 
     def _draw_muted_row(self, canvas: tk.Canvas, habit: Habit, color: str, today: date) -> None:
         self._draw_row_background(canvas, palette.ROW_BACKGROUND)
@@ -404,14 +425,35 @@ class TodayView(tk.Frame):
         canvas.create_window(
             CONTENT_WIDTH - _TRASH_MARGIN, ROW_HEIGHT / 2, anchor="e", window=trash
         )
+        self._focus.add((habit.id, TRASH_FOCUS), trash)
 
         # The whole row selects as well, which is easier to hit than the box.
         canvas.configure(cursor=pointer_cursor(canvas))
         canvas.bind("<Button-1>", for_habit(self.delete_mode.toggle, habit))
+        self._make_reachable(canvas, habit, self.delete_mode.toggle, editable=False)
 
     def _bind_edit(self, canvas: tk.Canvas, habit: Habit) -> None:
         for sequence in EDIT_SEQUENCES:
             canvas.bind(sequence, for_habit(self.actions.edit_habit, habit))
+
+    def _make_reachable(
+        self,
+        canvas: tk.Canvas,
+        habit: Habit,
+        activate: Callable[[Habit], object],
+        *,
+        editable: bool,
+    ) -> None:
+        """Let the row be reached with Tab: Space or Enter do what a click does."""
+        make_reachable(
+            canvas,
+            canvas,
+            _ROW_FOCUS_BOX,
+            _ROW_RADIUS,
+            activate=partial(activate, habit),
+            edit=partial(self.actions.edit_habit, habit) if editable else None,
+        )
+        self._focus.add((habit.id, ROW_FOCUS), canvas)
 
     # ---------- Buttons and priority card ----------
 

@@ -51,8 +51,15 @@ from . import chart_rows, texts
 from .day_cells import DayCellStyle, completed_area_colors, draw_day_cell
 from .helpers import (
     EDIT_SEQUENCES,
+    FOCUS_RING_INSET,
+    ROW_FOCUS,
+    TRASH_FOCUS,
+    Box,
+    FocusMemory,
     clear_children,
+    focus_anchor,
     for_habit,
+    make_reachable,
     muted_icon_color,
     new_canvas,
     noop,
@@ -96,6 +103,10 @@ _DELETE_BOX_X = 32
 _DELETE_BOX_Y = 12
 _DELETE_BOX_SIDE = 22
 _TRASH_MARGIN = 24
+# The anchor that stands in for a row in the Tab order sits on the plain background near the
+# row's top left corner, clear of the icon, the checkbox and the focus ring.
+_ANCHOR_X = CARD_PADDING + 10
+_ANCHOR_Y = 4
 _EMPTY_TODAY_CARD_HEIGHT = 170
 _HABITS_BOTTOM_PADDING = 14
 _BUTTONS_BOTTOM_PADDING = 20
@@ -181,6 +192,7 @@ class DashboardView(tk.Frame):
             service, self.actions, on_change=self.refresh, dialogs=dialogs
         )
         self.priority_entry: tk.Entry | None = None  # rebuilt by every refresh
+        self._focus = FocusMemory()  # keeps the keyboard focus on a row across redraws
 
         # The scroll frame: a canvas that fills everything and, inside it, a frame (the
         # page) hung from it. The bar and the wheel move the same view.
@@ -241,6 +253,7 @@ class DashboardView(tk.Frame):
 
     def refresh(self) -> None:
         """Empty the page and build the dashboard again with the current data."""
+        self._focus.begin(self)
         clear_children(self.page)
         self.priority.sync()
         today = self.service.today()
@@ -250,6 +263,7 @@ class DashboardView(tk.Frame):
         self._draw_grid(today, month)
         self._draw_consistency_card(today, month)
         self._bind_wheel(self.page)
+        self._focus.restore()
 
     def reset_modes(self) -> None:
         """Leave delete mode without redrawing (the caller redraws afterwards)."""
@@ -524,12 +538,11 @@ class DashboardView(tk.Frame):
             return
 
         done = habit.is_done(today)
+        background = soft_color_of(area) if done else palette.ROW_BACKGROUND
         # Everything drawn for the row gets the habit's tag so that all of it takes the click.
         tag = f"h{habit.id}"
         with tagged_items(canvas, tag):
-            self._row_background(
-                canvas, y, soft_color_of(area) if done else palette.ROW_BACKGROUND
-            )
+            self._row_background(canvas, y, background)
             area_icon(canvas, _ROW_ICON_X, center_y, _ROW_ICON_RADIUS, habit.area_id, color)
             canvas.create_text(
                 _NAME_X,
@@ -547,6 +560,7 @@ class DashboardView(tk.Frame):
         for sequence in EDIT_SEQUENCES:
             canvas.tag_bind(tag, sequence, for_habit(self.actions.edit_habit, habit))
         self._pointer_over(canvas, tag)
+        self._make_reachable(canvas, habit, y, background, self.actions.toggle, editable=True)
 
     def _draw_delete_row(self, canvas: tk.Canvas, habit: Habit, y: float) -> None:
         """The row in selection mode: box on the left, trash can on the right, pink if marked.
@@ -578,6 +592,8 @@ class DashboardView(tk.Frame):
             )
         canvas.tag_bind(tag, "<Button-1>", for_habit(self.delete_mode.toggle, habit))
         self._pointer_over(canvas, tag)
+        # Before the trash can, so that Tab reaches the row first and then its button.
+        self._make_reachable(canvas, habit, y, background, self.delete_mode.toggle, editable=False)
 
         # The trash can is a real button: it mirrors the selection and toggles it too.
         state: TrashState = "active" if selected else "normal"
@@ -585,6 +601,44 @@ class DashboardView(tk.Frame):
             canvas, partial(self.delete_mode.toggle, habit), state, parent_background=background
         )
         canvas.create_window(COLUMN_A_WIDTH - _TRASH_MARGIN, center_y, anchor="e", window=trash)
+        self._focus.add((habit.id, TRASH_FOCUS), trash)
+
+    def _make_reachable(
+        self,
+        canvas: tk.Canvas,
+        habit: Habit,
+        y: float,
+        background: str,
+        activate: Callable[[Habit], object],
+        *,
+        editable: bool,
+    ) -> None:
+        """Let the row be reached with Tab: Space or Enter do what a click does.
+
+        The rows are items of the card's canvas, which cannot take the keyboard focus, so an
+        anchor painted like the row stands in for it. It also takes the clicks that land on it.
+        """
+        anchor = focus_anchor(canvas, _ANCHOR_X, y + _ANCHOR_Y, background)
+        anchor.configure(cursor=pointer_cursor(anchor))
+        anchor.bind("<Button-1>", for_habit(activate, habit))
+        if editable:
+            for sequence in EDIT_SEQUENCES:
+                anchor.bind(sequence, for_habit(self.actions.edit_habit, habit))
+        ring_box: Box = (
+            CARD_PADDING + FOCUS_RING_INSET,
+            y + FOCUS_RING_INSET,
+            COLUMN_A_WIDTH - CARD_PADDING - FOCUS_RING_INSET,
+            y + _ROW_HEIGHT - FOCUS_RING_INSET,
+        )
+        make_reachable(
+            anchor,
+            canvas,
+            ring_box,
+            _ROW_RADIUS,
+            activate=partial(activate, habit),
+            edit=partial(self.actions.edit_habit, habit) if editable else None,
+        )
+        self._focus.add((habit.id, ROW_FOCUS), anchor)
 
     def _pointer_over(self, canvas: tk.Canvas, tag: str) -> None:
         """The pointing hand only over the rows (the rest of the card is not clickable)."""

@@ -2,7 +2,10 @@
 
 Why not ``ttk.Notebook``? It brings the system's look and cannot be painted with the pastel
 palette. A row of labels can: every "tab" is a clickable label with a lilac bar under it when
-active. The three views are stacked in the same cell and only the one that is due is raised.
+active. The three views share the same cell and only the one that is due is on the grid.
+
+The tabs work with the keyboard too: Tab reaches them, Space or Enter activate the one with the
+focus and Left / Right move to the neighbor tab and activate it.
 
 The window has two layouts that follow the real state of the window (there are no buttons to
 choose, the person only uses the green button of macOS):
@@ -32,11 +35,13 @@ from .controllers.habit_actions import format_number
 from .controllers.priority import PriorityEditor
 from .theme import palette
 from .theme.cursors import pointer_cursor
+from .theme.focus import RING_WIDTH, activate_with_keys
 from .theme.fonts import font
 from .theme.tkutil import TkEvent, widget_exists
 from .views import texts
 from .views.calendar import CalendarView
 from .views.dashboard import DashboardView
+from .views.helpers import focused_widget, is_inside
 from .views.month import MonthView
 from .views.today import TodayView
 
@@ -65,6 +70,10 @@ STARTUP_NOTICE_DELAY_MS = 300
 _TAB_PADDING_X = 22
 _TAB_PADDING_Y = 8
 _TAB_UNDERLINE_HEIGHT = 3
+
+# The focus ring is the border of the tab label. The border is always there, in the tab's own
+# color, and is taken out of the padding, so the tab has the same size with or without the ring.
+_TAB_RING_WIDTH = RING_WIDTH
 
 
 class Tab(StrEnum):
@@ -127,6 +136,7 @@ class MainWindow:
         self._notifier = notifier
         self._mode = Mode.WINDOW
         self._active_tab = Tab.TODAY
+        self._focused_tab: Tab | None = None  # the tab with the keyboard focus, if any
         self._mode_job: str | None = None  # the debounce of the size detection
         self._reminder_job: str | None = None
         self._startup_job: str | None = None
@@ -179,7 +189,7 @@ class MainWindow:
         root.report_callback_exception = self.report_callback_exception
 
     def _build_view_container(self) -> tk.Frame:
-        """The frame where the three views share one grid cell; tkraise() decides which shows."""
+        """The frame where the three views share one grid cell; only the due one is on the grid."""
         container = tk.Frame(self.window_frame, bg=palette.PAPER)
         container.pack(fill="both", expand=True)
         container.grid_rowconfigure(0, weight=1)
@@ -198,8 +208,11 @@ class MainWindow:
                 tab_bar,
                 text=_TAB_LABELS[tab],
                 font=tab_font,
-                padx=_TAB_PADDING_X,
-                pady=_TAB_PADDING_Y,
+                padx=_TAB_PADDING_X - _TAB_RING_WIDTH,
+                pady=_TAB_PADDING_Y - _TAB_RING_WIDTH,
+                highlightthickness=_TAB_RING_WIDTH,
+                highlightcolor=palette.FOCUS_RING,
+                takefocus=True,
                 cursor=pointer_cursor(tab_bar),
             )
             label.grid(row=0, column=column, sticky="ew")
@@ -207,24 +220,71 @@ class MainWindow:
             underline = tk.Frame(tab_bar, height=_TAB_UNDERLINE_HEIGHT, bg=palette.PAPER)
             underline.grid(row=1, column=column, sticky="ew")
             label.bind("<Button-1>", partial(self._on_tab_click, tab))
+            label.bind("<FocusIn>", partial(self._on_tab_focus, tab, True), add="+")
+            label.bind("<FocusOut>", partial(self._on_tab_focus, tab, False), add="+")
+            activate_with_keys(label, partial(self.show_tab, tab))
+            label.bind("<Left>", partial(self._on_tab_arrow, tab, -1))
+            label.bind("<Right>", partial(self._on_tab_arrow, tab, 1))
             self._tab_widgets[tab] = (label, underline)
 
     def _on_tab_click(self, tab: Tab, _event: TkEvent) -> None:
         self.show_tab(tab)
 
+    def _on_tab_focus(self, tab: Tab, focused: bool, _event: TkEvent) -> None:
+        self._focused_tab = tab if focused else None
+        self._paint_tab(tab)
+
+    def _on_tab_arrow(self, tab: Tab, step: int, _event: TkEvent) -> str:
+        self.select_neighbor_tab(tab, step)
+        return "break"  # the arrows do nothing else while a tab has the focus
+
+    def select_neighbor_tab(self, tab: Tab, step: int) -> None:
+        """Activate the tab ``step`` places from ``tab`` and give it the keyboard focus.
+
+        Nothing happens past the first and the last tab.
+        """
+        tabs = list(Tab)
+        index = tabs.index(tab) + step
+        if 0 <= index < len(tabs):
+            neighbor = tabs[index]
+            self.show_tab(neighbor)
+            self._tab_widgets[neighbor][0].focus_set()
+
+    def _paint_tab(self, tab: Tab) -> None:
+        """Color a tab for its state: active or not, and with the keyboard focus or not."""
+        label, underline = self._tab_widgets[tab]
+        active = tab is self._active_tab
+        background = palette.TAB_ACTIVE_BACKGROUND if active else palette.TAB_INACTIVE_BACKGROUND
+        label.configure(
+            bg=background,
+            fg=palette.TAB_ACTIVE_TEXT if active else palette.TAB_INACTIVE_TEXT,
+            # The border is the focus ring: in the tab's color it is not seen.
+            highlightbackground=palette.FOCUS_RING if tab is self._focused_tab else background,
+        )
+        underline.configure(bg=palette.LILAC if active else palette.PAPER)
+
     def show_tab(self, tab: Tab) -> None:
-        """Activate a tab: repaint the bar, raise its view and refresh it with fresh data."""
+        """Activate a tab: repaint the bar, show its view and refresh it with fresh data.
+
+        The other views leave the grid instead of just being covered, so Tab never reaches a
+        control that cannot be seen; the keyboard focus leaves them too.
+        """
         self._active_tab = tab
-        for key, (label, underline) in self._tab_widgets.items():
+        for key in self._tab_widgets:
+            self._paint_tab(key)
+        for key, view in self._views.items():
             if key is tab:
-                label.configure(bg=palette.TAB_ACTIVE_BACKGROUND, fg=palette.TAB_ACTIVE_TEXT)
-                underline.configure(bg=palette.LILAC)
+                view.grid(row=0, column=0, sticky="nsew")
             else:
-                label.configure(bg=palette.TAB_INACTIVE_BACKGROUND, fg=palette.TAB_INACTIVE_TEXT)
-                underline.configure(bg=palette.PAPER)
-        view = self._views[tab]
-        view.tkraise()
-        view.refresh()
+                self._release_focus_from(view)
+                view.grid_remove()
+        self._views[tab].refresh()
+
+    def _release_focus_from(self, widget: tk.Misc) -> None:
+        """Take the keyboard focus to the window if it is inside ``widget``, about to be hidden."""
+        focused = focused_widget(self.root)
+        if focused is not None and is_inside(focused, widget):
+            self.root.focus_set()
 
     @property
     def active_tab(self) -> Tab:
@@ -274,6 +334,7 @@ class MainWindow:
         else:
             self.dashboard.reset_modes()  # a half-done delete does not survive the switch
             self.dashboard.refresh()
+        self._release_focus_from(self.window_frame)
         self.window_frame.pack_forget()
         self.root.configure(bg=palette.BACKGROUND)
         self.dashboard.pack(fill="both", expand=True)
@@ -282,6 +343,7 @@ class MainWindow:
     def show_window(self) -> None:
         """Go back to the compact app (the window has returned to its size)."""
         if self.dashboard is not None:
+            self._release_focus_from(self.dashboard)
             self.dashboard.pack_forget()
         self.root.configure(bg=palette.PAPER)
         self.window_frame.pack(fill="both", expand=True)
