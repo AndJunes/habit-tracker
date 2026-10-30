@@ -27,9 +27,11 @@ def test_a_tracked_canvas_is_reachable_with_tab(tk_root: tk.Tk) -> None:
 
 
 def test_the_focus_flag_follows_focus_in_and_out_and_asks_for_a_redraw(
-    tk_root: tk.Tk,
+    window: tk.Toplevel,
 ) -> None:
-    canvas = tk.Canvas(tk_root)
+    canvas = tk.Canvas(window)  # mapped: a window that is not on screen gets no focus events
+    canvas.pack()
+    window.update()
     redraws: list[int] = []
     has_focus = track_focus(canvas, lambda: redraws.append(1))
     assert not has_focus()

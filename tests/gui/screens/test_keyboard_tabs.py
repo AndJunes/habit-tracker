@@ -118,6 +118,7 @@ class TestRing:
             assert label.cget("highlightbackground") == label.cget("bg")
 
     def test_the_ring_shows_only_while_the_tab_has_the_focus(self, app: MainWindow) -> None:
+        show(app.root)  # a window that is not on screen gets no focus events
         label = tab_labels(app)[2]
 
         label.event_generate("<FocusIn>")
@@ -127,6 +128,7 @@ class TestRing:
         assert label.cget("highlightbackground") == label.cget("bg")
 
     def test_the_ring_survives_the_tab_bar_being_repainted(self, app: MainWindow) -> None:
+        show(app.root)
         label = tab_labels(app)[0]
         label.event_generate("<FocusIn>")
 
@@ -161,6 +163,7 @@ class TestArrows:
     def test_the_arrows_activate_the_neighbor_tab_and_hand_it_the_focus(
         self, app: MainWindow
     ) -> None:
+        show(app.root)  # Tk only gives the focus to widgets that are on screen
         labels = tab_labels(app)
 
         app.select_neighbor_tab(Tab.TODAY, 1)
@@ -273,6 +276,7 @@ class TestOnlyTheVisibleViewIsReachable:
         assert (app.today_view.winfo_width(), app.today_view.winfo_height()) == before
 
     def test_the_focus_leaves_a_view_that_is_hidden(self, app: MainWindow) -> None:
+        show(app.root)
         row = app.today_view.list_frame.winfo_children()[0]
         row.focus_set()
         assert app.root.focus_lastfor() is row
@@ -284,6 +288,7 @@ class TestOnlyTheVisibleViewIsReachable:
     def test_the_focus_of_a_tab_is_not_taken_away_when_the_views_change(
         self, app: MainWindow
     ) -> None:
+        show(app.root)
         label = tab_labels(app)[0]
         label.focus_set()
 
