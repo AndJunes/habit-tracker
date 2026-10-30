@@ -199,5 +199,8 @@ class FocusMemory:
         """Put the focus on the new version of the control that had it, if there is one."""
         key, self._remembered = self._remembered, None
         widget = self._widgets.get(key) if key is not None else None
-        if widget is not None:
+        if widget is not None and widget_exists(widget):
+            # Tk drops the focus given to a widget that is not on screen yet, and the new rows
+            # only are after the layout pass: run it now.
+            widget.update_idletasks()
             widget.focus_set()

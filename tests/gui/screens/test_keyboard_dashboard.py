@@ -316,6 +316,7 @@ class TestDeleteMode:
         self, view: DashboardView, service: HabitService
     ) -> None:
         view.delete_mode.enter()
+        view.update()  # the new rows get events only once they are mapped
         card = today_card(view)
 
         anchors(card)[-1].event_generate("<FocusIn>")
@@ -340,6 +341,7 @@ class TestDeleteMode:
     ) -> None:
         habits = service.habits()
         view.delete_mode.enter()
+        view.update()  # the new rows get the focus only once they are mapped
         anchors(today_card(view))[2].focus_set()
 
         view.delete_mode.toggle(habits[2])
@@ -352,6 +354,7 @@ class TestDeleteMode:
     ) -> None:
         habits = service.habits()
         view.delete_mode.enter()
+        view.update()  # the new rows get the focus only once they are mapped
         trash_buttons(view)[1].focus_set()
 
         view.delete_mode.toggle(habits[1])

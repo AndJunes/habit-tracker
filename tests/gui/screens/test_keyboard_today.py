@@ -199,6 +199,7 @@ class TestRing:
 
     def test_the_ring_also_shows_on_a_row_of_delete_mode(self, view: TodayView) -> None:
         view.delete_mode.enter()
+        view.update()  # the new rows get events and the focus only once they are mapped
         row = row_of(view, FINANCES)
 
         row.event_generate("<FocusIn>")
@@ -299,6 +300,7 @@ class TestDeleteMode:
     ) -> None:
         habits = service.habits()
         view.delete_mode.enter()
+        view.update()  # the new rows get the focus only once they are mapped
         rows(view)[1].focus_set()
 
         view.delete_mode.toggle(habits[1])
@@ -311,6 +313,7 @@ class TestDeleteMode:
     ) -> None:
         habits = service.habits()
         view.delete_mode.enter()
+        view.update()  # the new rows get the focus only once they are mapped
         trash_buttons(view)[2].focus_set()
 
         view.delete_mode.toggle(habits[2])
@@ -322,6 +325,7 @@ class TestDeleteMode:
     ) -> None:
         habits = service.habits()
         view.delete_mode.enter()
+        view.update()  # the new rows get the focus only once they are mapped
         rows(view)[0].focus_set()
 
         view.delete_mode.toggle(habits[3])
