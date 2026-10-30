@@ -8,7 +8,7 @@ from ..theme.fonts import INPUT_FONT_SIZE, font
 
 
 def themed_entry(master: tk.Misc, **options: Any) -> tk.Entry:
-    """A flat ``tk.Entry`` in the theme's colors: thin border, lilac while focused."""
+    """A flat ``tk.Entry`` in the theme's colors; its border shows the focus ring color."""
     return tk.Entry(
         master,
         bg=palette.WHITE,
@@ -18,7 +18,7 @@ def themed_entry(master: tk.Misc, **options: Any) -> tk.Entry:
         relief="flat",
         highlightthickness=1,
         highlightbackground=palette.BORDER,
-        highlightcolor=palette.LILAC,
+        highlightcolor=palette.FOCUS_RING,
         insertbackground=palette.INK,
         **options,
     )

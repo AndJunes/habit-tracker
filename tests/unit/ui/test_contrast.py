@@ -81,3 +81,12 @@ def test_a_text_color_reaches_the_minimum_on_each_of_its_surfaces(name: str) -> 
         f"{name} {color} on {worst} is {contrast(color, worst):.2f} : 1"
     )
 
+
+FOCUS_MINIMUM = 3.0  # non-text contrast: WCAG 1.4.11
+
+
+@pytest.mark.parametrize(
+    "surface", [*GENERAL_SURFACES, palette.WHITE, palette.DATE_CHIP_BACKGROUND]
+)
+def test_the_focus_ring_is_visible_on_every_surface(surface: str) -> None:
+    assert contrast(palette.FOCUS_RING, surface) >= FOCUS_MINIMUM

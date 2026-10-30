@@ -14,6 +14,7 @@ PAPER = "#fffdfb"  # cards and surfaces
 BORDER = "#e7dced"  # card border
 LILAC = "#a98fd0"  # main accent
 LILAC_SOFT = "#efe7f4"  # pale accent: ring track, today's cell
+FOCUS_RING = "#917bb3"  # keyboard focus ring: 3 : 1 on every surface (WCAG 1.4.11)
 
 # Text
 INK = "#574d63"  # body text
