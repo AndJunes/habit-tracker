@@ -249,6 +249,45 @@ def test_the_capture_clock_stops_at_ten_in_the_morning_of_today(
     assert (now.hour, now.minute, now.second) == (10, 0, 0)
 
 
+# ================= Finding the window to capture =================
+
+CONTENT = (40, 92, 620, 800)  # left, top, width, height of a Tk window's content, in points
+
+
+def macos_window(window_id: int, x: float, y: float, w: float, h: float) -> dict[str, float]:
+    return {"id": window_id, "x": x, "y": y, "w": w, "h": h}
+
+
+def test_the_window_is_found_by_its_content_area_and_includes_the_title_bar(
+    capture_screens: ModuleType,
+) -> None:
+    windows = [macos_window(7, 40, 60, 620, 832)]  # starts above the content: the title bar
+    assert capture_screens.find_window_id(windows, *CONTENT) == 7
+
+
+def test_a_window_of_another_width_or_place_is_not_the_one(capture_screens: ModuleType) -> None:
+    windows = [
+        macos_window(1, 40, 60, 700, 832),  # wider
+        macos_window(2, 400, 60, 620, 832),  # elsewhere
+        macos_window(3, 40, 60, 620, 200),  # ends well above the bottom of the content
+    ]
+    assert capture_screens.find_window_id(windows, *CONTENT) is None
+
+
+def test_when_several_windows_fit_the_smallest_one_wins(capture_screens: ModuleType) -> None:
+    windows = [macos_window(1, 40, 20, 620, 900), macos_window(2, 40, 60, 620, 832)]
+    assert capture_screens.find_window_id(windows, *CONTENT) == 2
+
+
+def test_no_windows_means_no_match(capture_screens: ModuleType) -> None:
+    assert capture_screens.find_window_id([], *CONTENT) is None
+
+
+def test_a_difference_of_a_few_points_is_tolerated(capture_screens: ModuleType) -> None:
+    windows = [macos_window(5, 41, 61, 619, 832)]
+    assert capture_screens.find_window_id(windows, *CONTENT) == 5
+
+
 # ================= Command line =================
 
 
@@ -260,6 +299,13 @@ def test_the_options_default_to_the_repository_images_and_the_desktop(
     assert args.captures_dir == Path.home() / "Desktop"
     assert args.rebuild_gif is False
     assert args.no_validate is False
+    assert args.auto is False
+
+
+def test_auto_asks_the_script_to_capture_the_windows_by_itself(
+    capture_screens: ModuleType,
+) -> None:
+    assert capture_screens.build_parser().parse_args(["--auto"]).auto is True
 
 
 def test_the_help_describes_every_option(
@@ -269,7 +315,7 @@ def test_the_help_describes_every_option(
         capture_screens.build_parser().parse_args(["--help"])
     assert raised.value.code == 0
     text = capsys.readouterr().out
-    for option in ("--output", "--captures-dir", "--rebuild-gif", "--no-validate"):
+    for option in ("--output", "--captures-dir", "--auto", "--rebuild-gif", "--no-validate"):
         assert option in text
 
 

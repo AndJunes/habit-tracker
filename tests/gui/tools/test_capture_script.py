@@ -125,6 +125,25 @@ def test_the_script_walks_through_every_scene_and_leaves_each_screen_in_its_stat
     assert "Saved 0 of 10" in capsys.readouterr().out
 
 
+def test_the_month_always_has_events_and_the_today_scene_leaves_something_to_mark(
+    make_script: Callable[..., Any],
+) -> None:
+    script = make_script()
+    service = script.service
+    today = service.today()
+    assert service.important_dates(today.year, today.month)
+
+    def done_today() -> int:
+        return sum(1 for habit in service.habits() if habit.is_done(today))
+
+    scene = script.advance()
+    assert scene is not None
+    assert scene.name == "hoy"
+    pending = done_today()
+    script.advance()  # "marcado"
+    assert done_today() == pending + 1
+
+
 def test_the_app_runs_on_the_stopped_clock_and_looks_like_the_regular_one(
     make_script: Callable[..., Any], now: datetime
 ) -> None:

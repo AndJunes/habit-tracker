@@ -1,6 +1,7 @@
 """Guided capture of the README screenshots, and the animated GIF built from them.
 
     python tools/capture_screens.py                  # capture every scene
+    python tools/capture_screens.py --auto           # the script captures each window itself
     python tools/capture_screens.py --rebuild-gif    # rebuild demo.gif from the saved PNGs
 
 The app opens in demo mode on a fixed clock with its data in memory: nothing is read from or
@@ -10,17 +11,25 @@ folder once it is completely written, refuses full-screen captures and captures 
 window, and saves the accepted ones under the name of the scene. When every scene is saved it
 builds the GIF.
 
+With ``--auto`` nobody takes the screenshots: the script finds the macOS window of each scene and
+saves it with ``screencapture -l`` (the first time, macOS asks to allow the terminal to record the
+screen). Only that window is captured, with its shadow and transparent corners, never the desktop.
+
 Taking screenshots needs macOS. Pillow (the ``tools`` dependency group) reads and combines the
 images; the GIF can be rebuilt on any system.
 """
 
 import argparse
 import importlib
+import json
+import os
+import subprocess
 import sys
+import tempfile
 import time
 import tkinter as tk
 import traceback
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from enum import StrEnum
@@ -30,6 +39,7 @@ from types import ModuleType, TracebackType
 from habit_tracker.clock import Clock, FixedClock
 from habit_tracker.demo import build_demo_snapshot
 from habit_tracker.domain.enums import Weekday
+from habit_tracker.domain.frequency import Quota
 from habit_tracker.service import HabitService
 from habit_tracker.storage.memory import MemoryRepository
 from habit_tracker.ui.controllers.dialogs import Dialogs
@@ -85,7 +95,7 @@ SCREENSHOT_PREFIXES = ("captura", "screenshot")  # macOS names them in the syste
 GIF_CANVAS = (760, 940)
 GIF_MARGIN = 40
 GIF_FRAME_SECONDS = 1.8
-GIF_COLORS = 128
+GIF_COLORS = 256
 GIF_BACKGROUND = palette.BACKGROUND
 
 CAPTURE_HOUR = 10  # the fixed clock stops at this hour of the current day
@@ -100,6 +110,8 @@ POLL_START_MS = 1500
 POLL_INTERVAL_MS = 600
 SETTLE_DELAY_MS = 900  # time given to a scene to lay itself out before asking for the capture
 SETTLE_POLL_MS = 200
+AUTO_CAPTURE_DELAY_MS = 400  # time for macOS to compose the window before it is captured
+WINDOW_MATCH_TOLERANCE = 3  # points of difference between Tk's geometry and the macOS window
 MAX_SETTLE_ATTEMPTS = 25
 
 # Sample content typed into the form (what the screenshots show).
@@ -112,6 +124,13 @@ SAMPLE_GOAL = "20"
 SAMPLE_END_OFFSET = 60  # days from today
 SAMPLE_REMINDER_TIME = "20:00"
 DELETE_SELECTION = (3, 4)  # positions in the habit list
+# Events of the month, as (day, title). The demo's own fall in the weeks to come, which can leave
+# the "dates of the month" card empty, so these are added when the month has none.
+SAMPLE_EVENTS = (
+    (6, "Entrega del informe"),
+    (13, "Examen de inglés"),
+    (24, "Viaje de fin de semana"),
+)
 
 PILLOW_MISSING = (
     "Pillow is required to read and combine the screenshots. "
@@ -148,6 +167,21 @@ MSG_PERMISSION = (
 MSG_WINDOW_CLOSED = (
     "\nSe cerró la ventana de la escena antes de recoger la captura: el guion se detiene."
 )
+MSG_SCREEN_PERMISSION = (
+    "screencapture could not save the window. If macOS has not allowed it yet, go to System "
+    "Settings > Privacy & Security > Screen & System Audio Recording, allow the terminal you "
+    "are using, then run it again."
+)
+# Lists the on-screen windows of one process through the system window list (JavaScript for
+# Automation, which ships with macOS): number, position and size, in points.
+WINDOW_LIST_SCRIPT = """
+ObjC.import('CoreGraphics');
+const windows = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(1 | 16, 0)));
+JSON.stringify(windows
+    .filter(w => w.kCGWindowOwnerPID === %d && w.kCGWindowLayer === 0)
+    .map(w => ({id: w.kCGWindowNumber, x: w.kCGWindowBounds.X, y: w.kCGWindowBounds.Y,
+                w: w.kCGWindowBounds.Width, h: w.kCGWindowBounds.Height})));
+"""
 MSG_NOT_READY = "    Aviso: la ventana no llegó a su estado final; revisar antes de capturar."
 MSG_NOTHING_TO_MARK = "    Aviso: no hay un hábito pendiente que marcar hoy."
 
@@ -359,6 +393,66 @@ def capture_clock() -> FixedClock:
     return FixedClock(moment)
 
 
+def find_window_id(
+    windows: Iterable[Mapping[str, float]],
+    left: int,
+    top: int,
+    width: int,
+    height: int,
+    *,
+    tolerance: int = WINDOW_MATCH_TOLERANCE,
+) -> int | None:
+    """The macOS id of the window whose content is at the given place, if there is one.
+
+    ``left``, ``top``, ``width`` and ``height`` are the content area of a Tk window, in points.
+    The macOS window is the same width, starts at the same place or higher (the title bar is
+    part of it) and reaches at least to the bottom of the content. When several windows fit,
+    the smallest one is the closest.
+    """
+    best: Mapping[str, float] | None = None
+    for window in windows:
+        fits = (
+            abs(window["x"] - left) <= tolerance
+            and abs(window["w"] - width) <= tolerance
+            and window["y"] <= top + tolerance
+            and window["y"] + window["h"] >= top + height - tolerance
+        )
+        if fits and (best is None or window["w"] * window["h"] < best["w"] * best["h"]):
+            best = window
+    return None if best is None else int(best["id"])
+
+
+def process_windows(pid: int) -> list[dict[str, float]]:
+    """The on-screen windows of a process: ``id``, ``x``, ``y``, ``w`` and ``h`` of each."""
+    try:
+        done = subprocess.run(
+            ["osascript", "-l", "JavaScript", "-e", WINDOW_LIST_SCRIPT % pid],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        windows: list[dict[str, float]] = json.loads(done.stdout)
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as error:
+        raise CaptureError(f"could not list the windows of the app: {error}") from error
+    return windows
+
+
+def grab_window(window_id: int, destination: Path) -> None:
+    """Save the macOS window with that id, shadow included, as a PNG at ``destination``."""
+    try:
+        done = subprocess.run(
+            ["screencapture", "-x", "-l", str(window_id), str(destination)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as error:
+        raise CaptureError(f"could not run screencapture: {error}") from error
+    if done.returncode != 0 or not destination.exists() or destination.stat().st_size == 0:
+        detail = f" ({done.stderr.strip()})" if done.stderr.strip() else ""
+        raise CaptureError(MSG_SCREEN_PERMISSION + detail)
+
+
 # ---------- Driving the app ----------
 
 
@@ -510,7 +604,8 @@ class FormPilot:
 class CaptureScript:
     """Puts the app in each scene and collects the screenshot taken of it.
 
-    ``hidden`` is for tests: the windows stay withdrawn and no capture is awaited. ``root``
+    ``auto`` captures every window by itself instead of waiting for a screenshot taken by the
+    person. ``hidden`` is for tests: the windows stay withdrawn and no capture is awaited. ``root``
     lets a test provide the window to build the app on; ``clock`` and ``dialogs`` replace the
     stopped clock and the system dialogs.
     """
@@ -521,6 +616,7 @@ class CaptureScript:
         captures_dir: Path,
         *,
         validate: bool = True,
+        auto: bool = False,
         hidden: bool = False,
         root: tk.Tk | None = None,
         clock: Clock | None = None,
@@ -529,6 +625,7 @@ class CaptureScript:
         self.output = output
         self.captures_dir = captures_dir
         self.validate = validate
+        self.auto = auto
         self.hidden = hidden
         self.clock = clock if clock is not None else capture_clock()
         snapshot = build_demo_snapshot(self.clock.now().date())
@@ -542,6 +639,8 @@ class CaptureScript:
         if hidden:
             self.root.withdraw()
 
+        self._add_month_events()
+        self._pending_id: int | None = None  # the habit "Today" leaves for the next scene to mark
         self.dialog: HabitFormDialog | None = None
         self.form: FormPilot | None = None
         self.saved: list[Path] = []
@@ -604,19 +703,51 @@ class CaptureScript:
             scenes.append(Scene(name, title, target, show, settle))
         return scenes
 
+    def _add_month_events(self) -> None:
+        """Give the month some events to show, unless it already has them."""
+        today = self.service.today()
+        if self.service.important_dates(today.year, today.month):
+            return
+        for day, title in SAMPLE_EVENTS:
+            self.service.add_important_date(today.replace(day=day), title)
+
+    def _leave_one_pending(self) -> None:
+        """Unmark a habit done today, so that the scene after this one has something to mark.
+
+        The demo has everything done on some days, and then "marking" would change nothing.
+        Quotas are left alone, and habits that need no value come first.
+        """
+        today = self.service.today()
+        candidates = [
+            habit
+            for habit in self.service.habits()
+            if habit.applies_on(today)
+            and habit.is_done(today)
+            and not isinstance(habit.frequency, Quota)
+        ]
+        if candidates:
+            chosen = min(candidates, key=lambda habit: habit.measurement is not None)
+            self.service.mark(chosen.id, False, day=today)
+            self._pending_id = chosen.id
+
     def _show_today(self) -> tk.Misc:
+        self._leave_one_pending()
         self.window.show_tab(Tab.TODAY)
+        self.window.today_view.refresh()
         return self.root
 
     def _show_marked(self) -> tk.Misc:
-        # The first habit that is due today, still pending and asks for no value when marked.
-        today = self.service.today()
-        for habit in self.service.habits():
-            if habit.applies_on(today) and not habit.is_done(today) and habit.measurement is None:
-                self.service.mark(habit.id, True, day=today)
-                break
-        else:
+        habit = None if self._pending_id is None else self.service.find_habit(self._pending_id)
+        if habit is None:
             print(MSG_NOTHING_TO_MARK, flush=True)
+        else:
+            measurement = habit.measurement
+            self.service.mark(
+                habit.id,
+                True,
+                day=self.service.today(),
+                value=None if measurement is None else measurement.goal,
+            )
         self.window.today_view.refresh()
         return self.root
 
@@ -765,12 +896,35 @@ class CaptureScript:
         Only screenshots modified at or after ``since`` (by default, one second ago) count.
         """
         window.update()
+        if self.auto:
+            print(f"\n[{self.index + 1}/{len(self.scenes)}] {scene.title}", flush=True)
+            self.root.after(AUTO_CAPTURE_DELAY_MS, self._auto_capture, scene, window)
+            return
         started = time.time() - 1 if since is None else since
         self._waiting = _Waiting(scene, window, CaptureWatcher(self.captures_dir, started))
         destination = display_path(self.output / f"{scene.name}.png")
         print(
             capture_instructions(self.index + 1, len(self.scenes), scene, destination), flush=True
         )
+
+    def _auto_capture(self, scene: Scene, window: tk.Misc) -> None:
+        """Capture the scene's window by itself and move on to the next scene."""
+        if self._finished or not widget_exists(window):
+            return
+        window.update()
+        size = (window.winfo_width(), window.winfo_height())
+        window_id = find_window_id(
+            process_windows(os.getpid()), window.winfo_rootx(), window.winfo_rooty(), *size
+        )
+        if window_id is None:
+            raise CaptureError(f"could not find the macOS window of «{scene.title}»")
+        with tempfile.TemporaryDirectory(prefix="capture_screens_") as folder:
+            raw = Path(folder) / f"{scene.name}.png"
+            grab_window(window_id, raw)
+            accepted = self.accept(scene, size, raw)
+        if not accepted:
+            raise CaptureError(f"the capture of «{scene.title}» was rejected")
+        self.advance()
 
     def poll(self) -> None:
         """Look for the awaited screenshot and schedule the next look.
@@ -847,10 +1001,12 @@ class CaptureScript:
                 "built. Run again with --rebuild-gif once every frame is saved.",
                 flush=True,
             )
-        print(
-            f"\nListo. Las capturas originales siguen en {self.captures_dir}: se pueden borrar.",
-            flush=True,
-        )
+        if not self.auto:
+            print(
+                f"\nListo. Las capturas originales siguen en {self.captures_dir}: "
+                "se pueden borrar.",
+                flush=True,
+            )
         self.window.close()
 
 
@@ -881,6 +1037,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="folder where macOS saves the screenshots (default: %(default)s)",
     )
     parser.add_argument(
+        "--auto",
+        action="store_true",
+        help=(
+            "capture every window by itself with screencapture instead of waiting for the "
+            "screenshots (macOS asks once to allow the terminal to record the screen)"
+        ),
+    )
+    parser.add_argument(
         "--rebuild-gif",
         action="store_true",
         help="rebuild demo.gif from the PNGs already saved in --output, without opening the app",
@@ -901,17 +1065,26 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0 if rebuild_gif(args.output) else 1
         require_macos(sys.platform)
         _pillow_image()
-        if not args.captures_dir.is_dir():
+        if not args.auto and not args.captures_dir.is_dir():
             raise CaptureError(f"the screenshots folder does not exist: {args.captures_dir}")
         args.output.mkdir(parents=True, exist_ok=True)
-        script = CaptureScript(args.output, args.captures_dir, validate=not args.no_validate)
+        script = CaptureScript(
+            args.output, args.captures_dir, validate=not args.no_validate, auto=args.auto
+        )
     except CaptureError as error:
         print(f"capture_screens: {error}", file=sys.stderr)
         return 1
     except (OSError, tk.TclError) as error:
         print(f"capture_screens: {error}", file=sys.stderr)
         return 1
-    print("Guion de capturas. La app se abre con datos de demostración; seguir las indicaciones.")
+    if args.auto:
+        print(
+            "Capturas automáticas. La app se abre sola y recorre las escenas: no tocar el mouse."
+        )
+    else:
+        print(
+            "Guion de capturas. La app se abre con datos de demostración; seguir las indicaciones."
+        )
     try:
         completed = script.run()
     except KeyboardInterrupt:
