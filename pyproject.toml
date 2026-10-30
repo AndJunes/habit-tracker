@@ -17,6 +17,9 @@ classifiers = [
 ]
 dependencies = []
 
+[project.scripts]
+habit-tracker = "habit_tracker.cli:main"
+
 [dependency-groups]
 dev = [
   "pytest>=9",
