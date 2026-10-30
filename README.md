@@ -134,12 +134,15 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 Two helper scripts live in `tools/` and need Pillow (`python -m pip install --group tools`):
 
 ```bash
-python tools/capture_screens.py    # guides you through the screenshots of this README
+python tools/capture_screens.py --auto   # captures the screenshots and builds the GIF by itself
+python tools/capture_screens.py          # or guides you to take them by hand
 python tools/build_macos_app.py    # creates "Registro de hábitos.app" on the Desktop (macOS)
 ```
 
-The screenshot script refuses full-screen captures, so that a desktop never ends
-up in the repository.
+With `--auto` the app opens in demo mode, goes through every screen and saves only
+its own window (macOS asks once to allow the terminal to record the screen). The
+manual mode refuses full-screen captures, so that a desktop never ends up in the
+repository.
 
 ## Status and limits
 

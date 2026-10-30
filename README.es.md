@@ -134,12 +134,15 @@ Mira [CONTRIBUTING.md](CONTRIBUTING.md).
 En `tools/` hay dos scripts de ayuda que necesitan Pillow (`python -m pip install --group tools`):
 
 ```bash
-python tools/capture_screens.py    # te guía para sacar las capturas de este README
+python tools/capture_screens.py --auto   # saca las capturas y arma el GIF por su cuenta
+python tools/capture_screens.py          # o te guía para sacarlas a mano
 python tools/build_macos_app.py    # crea "Registro de hábitos.app" en el Escritorio (macOS)
 ```
 
-El script de capturas rechaza las de pantalla completa, para que un escritorio
-nunca termine en el repositorio.
+Con `--auto` la app se abre en modo demo, recorre todas las pantallas y guarda solo
+su propia ventana (macOS pide una vez permiso para grabar la pantalla). El modo manual
+rechaza las capturas de pantalla completa, para que un escritorio nunca termine en el
+repositorio.
 
 ## Estado y límites
 
